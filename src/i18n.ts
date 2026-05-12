@@ -2,6 +2,8 @@
  * i18n.ts – Internationalization support for Zotero Citations plugin
  */
 
+export type I18nValue = string | number | boolean | null | undefined;
+
 export interface I18NDict {
   [key: string]: string;
 }
@@ -16,6 +18,8 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.citationStyleSection": "引用样式",
     "settings.defaultStyle": "默认 CSL 样式",
     "settings.defaultStyleDesc": "新插入引用使用的格式",
+    "settings.refreshStyles": "刷新样式列表",
+    "settings.refreshStylesDesc": "从 Zotero 重新读取可用 CSL 样式",
     "settings.citationMode": "引用格式模式",
     "settings.citationModeDesc": "脚注模式：^[引用文本]；尾注模式：[^1] + 文末定义",
     "settings.editorDisplaySection": "编辑器显示",
@@ -162,6 +166,8 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.citationStyleSection": "Citation styles",
     "settings.defaultStyle": "Default CSL style",
     "settings.defaultStyleDesc": "Style used for newly inserted citations",
+    "settings.refreshStyles": "Refresh style list",
+    "settings.refreshStylesDesc": "Reload available CSL styles from Zotero",
     "settings.citationMode": "Citation mode",
     "settings.citationModeDesc": "Footnote mode: ^[citation text]; endnote mode: [^1] plus note definitions at the end of the document",
     "settings.editorDisplaySection": "Editor display",
@@ -301,44 +307,27 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
   },
 };
 
-import type { App } from "obsidian";
-
 export type Language = "zh" | "en";
-export type I18nValue = string | number | boolean | null | undefined;
 
-interface LanguageSettingsLike {
-  language?: string;
-}
-
-interface ZoteroPluginSettingsHolder {
-  settings?: LanguageSettingsLike;
-}
-
-type AppWithPluginSettings = App & {
-  plugins?: {
-    plugins?: Record<string, ZoteroPluginSettingsHolder | undefined>;
-  };
-};
-
-export function getLanguage(settings: LanguageSettingsLike | null | undefined): Language {
+export function getLanguage(settings: any): Language {
   return settings?.language === "en" ? "en" : "zh";
 }
 
-export function formatI18n(template: string, vars: Record<string, I18nValue> = {}): string {
-  return template.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] != null ? String(vars[key]) : "");
+export function formatI18n(template: string, vars: Record<string, any> = {}): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] != null ? String(vars[key]) : "");
 }
 
-export function t(settingsOrLang: LanguageSettingsLike | Language, key: string, vars?: Record<string, I18nValue>): string {
-  const lang: Language = typeof settingsOrLang === "string" ? settingsOrLang : getLanguage(settingsOrLang);
+export function t(settingsOrLang: any, key: string, vars?: Record<string, any>): string {
+  const lang: Language = typeof settingsOrLang === "string" ? settingsOrLang as Language : getLanguage(settingsOrLang);
   const dict = I18N[lang] || I18N.zh;
   const fallback = I18N.zh[key] || key;
   return formatI18n(dict[key] || fallback, vars);
 }
 
-export function getAppSettings(app: App): LanguageSettingsLike | undefined {
-  return (app as AppWithPluginSettings).plugins?.plugins?.["zotero-citations"]?.settings;
+export function getAppSettings(app: any): any {
+  return app?.plugins?.plugins?.["zotero-citations"]?.settings;
 }
 
-export function appT(app: App, key: string, vars?: Record<string, I18nValue>): string {
+export function appT(app: any, key: string, vars?: Record<string, any>): string {
   return t(getAppSettings(app) || {}, key, vars);
 }

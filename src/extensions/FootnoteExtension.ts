@@ -2,8 +2,7 @@
  * FootnoteExtension.ts – CodeMirror extension for Word-style footnote rendering
  */
 import { App, Component, MarkdownRenderer, MarkdownView, Notice } from "obsidian";
-import { ViewPlugin, WidgetType, Decoration, DecorationSet, EditorView, ViewUpdate } from "@codemirror/view";
-import { Range } from "@codemirror/state";
+import { ViewPlugin, WidgetType, Decoration, EditorView, ViewUpdate } from "@codemirror/view";
 import { appT } from "../i18n";
 import { CitationManager } from "../CitationManager";
 import { ZoteroItem } from "../ZoteroAPI";
@@ -19,16 +18,6 @@ interface PreviewInfo {
   text: string;
   edit?: EditInfo | null;
 }
-
-interface PopoverSpec {
-  app: App;
-  getSourcePath: () => string;
-  markdown: string;
-  fallbackText: string;
-  edit?: EditInfo;
-}
-
-type PopoverAttacher = (target: HTMLElement, spec: PopoverSpec) => void;
 
 interface InlineEditInfo {
   kind: "inline" | "endnote";
@@ -56,7 +45,6 @@ class FnWidget extends WidgetType {
     public preview: PreviewInfo,
     public app: App,
     public getSourcePath: () => string,
-    public attachPopover: PopoverAttacher,
     public identifier: string,
     public domId: string,
     public isHighlighted: boolean = false,
@@ -98,7 +86,7 @@ class FnWidget extends WidgetType {
     marker.addEventListener("mousedown", (event) => event.preventDefault());
     marker.addEventListener("click", (event) => event.preventDefault());
 
-    this.attachPopover(marker, {
+    attachRenderedPopover(marker, {
       app: this.app,
       getSourcePath: this.getSourcePath,
       markdown: this.preview.markdown,
@@ -126,24 +114,23 @@ class FnWidget extends WidgetType {
 
 // ── Extension factory ──────────────────────────────────────────────────────
 export function createFootnoteExtension(options: FootnoteExtensionOptions) {
-  const attachPopover = createPopoverAttacher();
   return ViewPlugin.fromClass(
     class {
-      decorations: DecorationSet;
+      decorations: any;
       constructor(view: EditorView) {
-        this.decorations = buildDeco(view, options, attachPopover);
+        this.decorations = buildDeco(view, options);
       }
       update(update: ViewUpdate) {
         if (update.docChanged || update.viewportChanged || update.selectionSet) {
-          this.decorations = buildDeco(update.view, options, attachPopover);
+          this.decorations = buildDeco(update.view, options);
         }
       }
     },
-    { decorations: (v) => v.decorations },
+    { decorations: (v: any) => v.decorations },
   );
 }
 
-function buildDeco(view: EditorView, options: FootnoteExtensionOptions, attachPopover: PopoverAttacher) {
+function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
   if (!options.isEnabled()) return Decoration.none;
 
   const doc = view.state.doc.toString();
@@ -206,7 +193,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions, attachPo
   }
 
   hits.sort((a, b) => a.start - b.start);
-  const ranges: Range<Decoration>[] = [];
+  const ranges: any[] = [];
   let lastEnd = -1;
 
   for (const { start, end, num, markdown, text, identifier, domId, edit } of hits) {
@@ -218,7 +205,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions, attachPo
       Decoration.replace({
         widget: new FnWidget(
           num, { markdown, text, edit }, options.app,
-          options.getSourcePath, attachPopover, identifier, domId,
+          options.getSourcePath, identifier, domId,
           isInsideHighlight(doc, start, end),
         ),
       }).range(start, end),
@@ -243,8 +230,19 @@ function isInsideHighlight(doc: string, from: number, to: number): boolean {
   const line = doc.slice(lineStart, lineEnd);
   const relFrom = from - lineStart;
   const relTo = to - lineStart;
-  return countHighlightDelimiters(line.slice(0, relFrom)) % 2 === 1 &&
-    countHighlightDelimiters(line.slice(relTo)) % 2 === 1;
+
+  const before = line.slice(0, relFrom);
+  const after = line.slice(relTo);
+  const beforeCount = countHighlightDelimiters(before);
+  const afterCount = countHighlightDelimiters(after);
+
+  // Standard closed highlight: odd before + odd after.
+  // Tolerate unmatched opening == in Live Preview as well (odd before + no closing in the remainder).
+  const hasOpenBefore = beforeCount % 2 === 1;
+  const hasCloseAfter = afterCount % 2 === 1;
+  const noDelimiterAfter = afterCount === 0;
+
+  return hasOpenBefore && (hasCloseAfter || noDelimiterAfter);
 }
 
 function countHighlightDelimiters(text: string): number {
@@ -325,10 +323,18 @@ function normalizeTooltipText(text: string): string {
 }
 
 // ── Popover system ─────────────────────────────────────────────────────────
-interface ActivePopover {
+let activePopover: {
   target: HTMLElement; popover: HTMLElement; component: Component;
   hideTimer: number | null; reposition: () => void;
   onPopoverEnter: () => void; onPopoverLeave: () => void;
+} | null = null;
+
+interface PopoverSpec {
+  app: App;
+  getSourcePath: () => string;
+  markdown: string;
+  fallbackText: string;
+  edit?: EditInfo;
 }
 
 interface ZoteroPluginLike {
@@ -343,120 +349,73 @@ type AppWithPlugins = App & {
   };
 };
 
-function createPopoverAttacher(): PopoverAttacher {
-  let activePopover: ActivePopover | null = null;
-
-  const cancelPopoverHide = (): void => {
-    if (!activePopover?.hideTimer) return;
-    window.clearTimeout(activePopover.hideTimer);
-    activePopover.hideTimer = null;
-  };
-
-  const destroyActivePopover = (): void => {
-    if (!activePopover) return;
-    const { popover, component, reposition, onPopoverEnter, onPopoverLeave, hideTimer } = activePopover;
-    if (hideTimer) window.clearTimeout(hideTimer);
-    popover.removeEventListener("mouseenter", onPopoverEnter);
-    popover.removeEventListener("mouseleave", onPopoverLeave);
-    window.removeEventListener("scroll", reposition, true);
-    window.removeEventListener("resize", reposition);
-    component.unload();
-    popover.remove();
-    activePopover = null;
-  };
-
-  const schedulePopoverHide = (target: HTMLElement): void => {
-    if (!activePopover || activePopover.target !== target) return;
-    cancelPopoverHide();
-    activePopover.hideTimer = window.setTimeout(() => {
-      if (activePopover?.target === target) destroyActivePopover();
-    }, 80);
-  };
-
-  const showRenderedPopover = (target: HTMLElement, spec: PopoverSpec): void => {
-    if (!spec.markdown && !spec.fallbackText) return;
-    if (activePopover?.target === target) {
-      cancelPopoverHide();
-      activePopover.reposition();
-      return;
-    }
-    destroyActivePopover();
-
-    const popover = document.createElement("div");
-    popover.className = "popover hover-popover zotero-footnote-popover";
-
-    const embed = popover.createDiv({ cls: "markdown-embed", attr: { "data-type": "footnote" } });
-    const embedContent = embed.createDiv({ cls: "markdown-embed-content" });
-    const preview = embedContent.createDiv({ cls: "markdown-preview-view markdown-rendered" });
-    preview.setText(spec.fallbackText);
-
-    if (spec.edit) {
-      mountLocatorEditor(
-        embedContent,
-        spec,
-        () => activePopover?.target === target,
-        destroyActivePopover,
-      );
-    }
-    if (!spec.markdown.trim()) embed.addClass("mod-empty");
-
-    document.body.appendChild(popover);
-    const component = new Component();
-    const reposition = () => positionPopover(target, popover);
-    const onPopoverEnter = () => cancelPopoverHide();
-    const onPopoverLeave = () => schedulePopoverHide(target);
-    popover.addEventListener("mouseenter", onPopoverEnter);
-    popover.addEventListener("mouseleave", onPopoverLeave);
-    window.addEventListener("scroll", reposition, true);
-    window.addEventListener("resize", reposition);
-
-    activePopover = { target, popover, component, hideTimer: null, reposition, onPopoverEnter, onPopoverLeave };
-    reposition();
-    requestAnimationFrame(reposition);
-
-    if (spec.markdown.trim()) {
-      void renderPopoverMarkdown(preview, spec, component, reposition, () => activePopover?.target === target);
-    }
-  };
-
-  return (target: HTMLElement, spec: PopoverSpec): void => {
-    const show = () => showRenderedPopover(target, spec);
-    const scheduleHide = () => schedulePopoverHide(target);
-    target.addEventListener("mouseenter", show);
-    target.addEventListener("mouseleave", scheduleHide);
-    target.addEventListener("mousemove", show);
-    target.addEventListener("pointerenter", show);
-    target.addEventListener("pointerleave", scheduleHide);
-    target.addEventListener("pointermove", show);
-    target.addEventListener("focus", show);
-    target.addEventListener("blur", scheduleHide);
-  };
+function attachRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
+  const show = () => showRenderedPopover(target, spec);
+  const scheduleHide = () => schedulePopoverHide(target);
+  target.addEventListener("mouseenter", show);
+  target.addEventListener("mouseleave", scheduleHide);
+  target.addEventListener("mousemove", show);
+  target.addEventListener("pointerenter", show);
+  target.addEventListener("pointerleave", scheduleHide);
+  target.addEventListener("pointermove", show);
+  target.addEventListener("focus", show);
+  target.addEventListener("blur", scheduleHide);
 }
 
-async function renderPopoverMarkdown(
-  preview: HTMLElement,
-  spec: PopoverSpec,
-  component: Component,
-  reposition: () => void,
-  isActiveTarget: () => boolean,
-): Promise<void> {
+function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
+  if (!spec.markdown && !spec.fallbackText) return;
+  if (activePopover?.target === target) {
+    cancelPopoverHide();
+    activePopover.reposition();
+    return;
+  }
+  destroyActivePopover();
+
+  const popover = document.createElement("div");
+  popover.className = "popover hover-popover zotero-footnote-popover";
+
+  const embed = popover.createDiv({ cls: "markdown-embed", attr: { "data-type": "footnote" } });
+  const embedContent = embed.createDiv({ cls: "markdown-embed-content" });
+  const preview = embedContent.createDiv({ cls: "markdown-preview-view markdown-rendered" });
+  preview.setText(spec.fallbackText);
+
+  if (spec.edit) {
+    mountLocatorEditor(embedContent, spec, target);
+  }
+  if (!spec.markdown.trim()) embed.addClass("mod-empty");
+
+  document.body.appendChild(popover);
+  const component = new Component();
+  const reposition = () => positionPopover(target, popover);
+  const onPopoverEnter = () => cancelPopoverHide();
+  const onPopoverLeave = () => schedulePopoverHide(target);
+  popover.addEventListener("mouseenter", onPopoverEnter);
+  popover.addEventListener("mouseleave", onPopoverLeave);
+  window.addEventListener("scroll", reposition, true);
+  window.addEventListener("resize", reposition);
+
+  activePopover = { target, popover, component, hideTimer: null, reposition, onPopoverEnter, onPopoverLeave };
+  reposition();
+  requestAnimationFrame(reposition);
+
+  if (spec.markdown.trim()) {
+    void renderPopoverMarkdown(preview, spec, component, target, reposition);
+  }
+}
+
+async function renderPopoverMarkdown(preview: HTMLElement, spec: PopoverSpec, component: Component, target: HTMLElement, reposition: () => void): Promise<void> {
   try {
     preview.empty();
     await MarkdownRenderer.render(spec.app, spec.markdown, preview, spec.getSourcePath(), component);
-    if (!isActiveTarget()) return;
+    if (activePopover?.target !== target) return;
     reposition();
     requestAnimationFrame(reposition);
-  } catch {
+  } catch (e) {
     if (!preview.textContent?.trim()) preview.setText(spec.fallbackText);
   }
 }
 
-function mountLocatorEditor(
-  container: HTMLElement,
-  spec: PopoverSpec,
-  isActiveTarget: () => boolean,
-  destroyPopover: () => void,
-): void {
+function mountLocatorEditor(container: HTMLElement, spec: PopoverSpec, target: HTMLElement): void {
   const wrap = container.createDiv({ cls: "zotero-footnote-locator-editor" });
   const input = wrap.createEl("input", { type: "text" });
   input.value = spec.edit!.locator || "";
@@ -468,7 +427,7 @@ function mountLocatorEditor(
     saveBtn.disabled = true;
     const ok = await applyLocatorEdit(spec, input.value.trim());
     saveBtn.disabled = false;
-    if (ok && isActiveTarget()) destroyPopover();
+    if (ok && activePopover?.target === target) destroyActivePopover();
   };
   saveBtn.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); void save(); });
   input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); void save(); } });
@@ -518,4 +477,31 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
   );
   popover.style.top = `${top}px`;
   popover.style.left = `${left}px`;
+}
+
+function schedulePopoverHide(target: HTMLElement): void {
+  if (!activePopover || activePopover.target !== target) return;
+  cancelPopoverHide();
+  activePopover.hideTimer = window.setTimeout(() => {
+    if (activePopover?.target === target) destroyActivePopover();
+  }, 80);
+}
+
+function cancelPopoverHide(): void {
+  if (!activePopover?.hideTimer) return;
+  window.clearTimeout(activePopover.hideTimer);
+  activePopover.hideTimer = null;
+}
+
+function destroyActivePopover(): void {
+  if (!activePopover) return;
+  const { popover, component, reposition, onPopoverEnter, onPopoverLeave, hideTimer } = activePopover;
+  if (hideTimer) window.clearTimeout(hideTimer);
+  popover.removeEventListener("mouseenter", onPopoverEnter);
+  popover.removeEventListener("mouseleave", onPopoverLeave);
+  window.removeEventListener("scroll", reposition, true);
+  window.removeEventListener("resize", reposition);
+  component.unload();
+  popover.remove();
+  activePopover = null;
 }

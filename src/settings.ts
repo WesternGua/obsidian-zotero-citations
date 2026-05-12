@@ -1,9 +1,10 @@
 /**
  * settings.ts – Plugin settings, CSL styles, and the SettingTab
  */
-import { Plugin, PluginSettingTab, Setting, App, requestUrl, Notice } from "obsidian";
-import { Language, t, getLanguage } from "./i18n";
-import { CitationManager, MinimalEditor } from "./CitationManager";
+import { PluginSettingTab, Setting, App, requestUrl, Notice } from "obsidian";
+import * as nodeHttp from "http";
+import { t, getLanguage, I18N, appT } from "./i18n";
+import { CitationManager } from "./CitationManager";
 
 // ── Hardcoded fallback CSL styles ──────────────────────────────────────────
 export interface CslStyleEntry {
@@ -71,54 +72,40 @@ export const DEFAULT_SETTINGS: ZoteroCitationsSettings = {
   language: "zh",
 };
 
-
-interface SettingsLike {
-  language?: string;
-}
-
-interface ZoteroPluginLike extends Plugin {
-  settings: ZoteroCitationsSettings;
-  saveSettings: () => Promise<void>;
-  applyLanguage: () => void;
-  getEditor: () => MinimalEditor | null;
-  refreshEditorExtension: () => void;
-  refreshToolbars: () => void;
-  resolveItems: (keys: string[]) => Promise<Map<string, import("./ZoteroAPI").ZoteroItem> | null>;
-  getCommandLabels: () => Record<string, string>;
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
-export function getStyleName(styleId: string, settingsOrLang: SettingsLike | Language): string {
+export function getStyleName(styleId: string, settingsOrLang: any): string {
   const lang = typeof settingsOrLang === "string" ? settingsOrLang : getLanguage(settingsOrLang);
   const style = CSL_STYLES.find((s) => s.id === styleId);
   if (!style) return styleId;
   return lang === "en" ? style.en : style.zh;
 }
 
-export function getModeLabel(mode: string, settingsOrLang: SettingsLike | Language, variant: string = "option"): string {
+export function getModeLabel(mode: string, settingsOrLang: any, variant: string = "option"): string {
   return t(settingsOrLang, `mode.${mode}.${variant}`);
 }
 
-export function getItemTypeLabel(itemType: string, settingsOrLang: SettingsLike | Language): string {
+export function getItemTypeLabel(itemType: string, settingsOrLang: any): string {
   return t(settingsOrLang, `itemType.${itemType}`);
 }
 
 // ── Setting Tab ────────────────────────────────────────────────────────────
 export class ZoteroSettingTab extends PluginSettingTab {
-  plugin: ZoteroPluginLike;
+  plugin: any;
   private statusDot!: HTMLElement;
   private statusText!: HTMLElement;
 
-  constructor(app: App, plugin: ZoteroPluginLike) {
+  constructor(app: App, plugin: any) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
-  display(): void {
+  async display(): Promise<void> {
     const { containerEl } = this;
     containerEl.empty();
+    new Setting(containerEl).setName("Zotero Citations").setHeading();
 
-    // Top-level general setting (no heading per Obsidian plugin guidelines)
+    // ── Interface language ──
+    new Setting(containerEl).setName(t(this.plugin.settings, "settings.interface")).setHeading();
     new Setting(containerEl)
       .setName(t(this.plugin.settings, "settings.interface"))
       .setDesc(t(this.plugin.settings, "settings.interfaceDesc"))
@@ -126,13 +113,11 @@ export class ZoteroSettingTab extends PluginSettingTab {
         dd.addOption("zh", t(this.plugin.settings, "lang.zh"));
         dd.addOption("en", t(this.plugin.settings, "lang.en"));
         dd.setValue(getLanguage(this.plugin.settings));
-        dd.onChange((v: string) => {
-          void (async () => {
-            this.plugin.settings.language = v === "en" ? "en" : "zh";
-            await this.plugin.saveSettings();
-            this.plugin.applyLanguage();
-            this.display();
-          })();
+        dd.onChange(async (v: string) => {
+          this.plugin.settings.language = v === "en" ? "en" : "zh";
+          await this.plugin.saveSettings();
+          this.plugin.applyLanguage();
+          this.display();
         });
       });
 
@@ -145,22 +130,58 @@ export class ZoteroSettingTab extends PluginSettingTab {
       text: t(this.plugin.settings, "settings.recheck"),
       cls: "zotero-settings-check-button",
     });
-    btn.addEventListener("click", () => { void this.checkConnection(); });
-    void this.checkConnection();
+    btn.addEventListener("click", () => this.checkConnection());
+    this.checkConnection();
 
     // ── Citation style ──
     new Setting(containerEl).setName(t(this.plugin.settings, "settings.citationStyleSection")).setHeading();
+
+    // Merge dynamic Zotero styles + fallback styles
+    let styleOptions: { id: string; title: string }[] = CSL_STYLES.map((s) => ({
+      id: s.id,
+      title: getStyleName(s.id, this.plugin.settings),
+    }));
+    try {
+      const dynamic = await this.plugin.api.getInstalledStyles();
+      if (dynamic.length) {
+        const dynamicMap = new Map(dynamic.map((s: any) => [s.id, s.title]));
+        for (const fallback of styleOptions) {
+          if (!dynamicMap.has(fallback.id)) dynamic.push(fallback as any);
+        }
+        styleOptions = dynamic;
+      }
+    } catch (e) {
+      // keep fallback styles
+    }
+
     new Setting(containerEl)
       .setName(t(this.plugin.settings, "settings.defaultStyle"))
       .setDesc(t(this.plugin.settings, "settings.defaultStyleDesc"))
       .addDropdown((dd) => {
-        for (const s of CSL_STYLES) dd.addOption(s.id, getStyleName(s.id, this.plugin.settings));
+        for (const s of styleOptions) dd.addOption(s.id, s.title);
+        if (!styleOptions.some((s) => s.id === this.plugin.settings.cslStyle)) {
+          dd.addOption(this.plugin.settings.cslStyle, this.plugin.settings.cslStyle);
+        }
         dd.setValue(this.plugin.settings.cslStyle);
-        dd.onChange((v: string) => {
-          void (async () => {
-            this.plugin.settings.cslStyle = v;
-            await this.plugin.saveSettings();
-          })();
+        dd.onChange(async (v: string) => {
+          this.plugin.settings.cslStyle = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName(t(this.plugin.settings, "settings.refreshStyles"))
+      .setDesc(t(this.plugin.settings, "settings.refreshStylesDesc"))
+      .addButton((btn) => {
+        btn.setButtonText(t(this.plugin.settings, "settings.refreshStyles"));
+        btn.onClick(async () => {
+          btn.setDisabled(true);
+          try {
+            this.display();
+            new Notice(t(this.plugin.settings, "prefs.stylesRefreshed", { count: styleOptions.length }));
+          } finally {
+            btn.setDisabled(false);
+          }
         });
       });
 
@@ -172,28 +193,26 @@ export class ZoteroSettingTab extends PluginSettingTab {
         dd.addOption("endnote", getModeLabel("endnote", this.plugin.settings, "option"));
         dd.addOption("inline", getModeLabel("inline", this.plugin.settings, "option"));
         dd.setValue(this.plugin.settings.citationMode);
-        dd.onChange((v: string) => {
-          void (async () => {
-            this.plugin.settings.citationMode = v;
-            await this.plugin.saveSettings();
-            const editor = this.plugin.getEditor();
-            if (!editor) return;
-            const content = editor.getValue();
-            const all = CitationManager.parseAllCitations(content);
-            if (!all.length) {
-              this.plugin.refreshEditorExtension();
-              return;
-            }
-            const keys = [...new Set(all.map((c) => c.key))];
-            const itemMap = await this.plugin.resolveItems(keys);
-            if (!itemMap) return;
-            const count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
+        dd.onChange(async (v: string) => {
+          this.plugin.settings.citationMode = v;
+          await this.plugin.saveSettings();
+          const editor = this.plugin.getEditor();
+          if (!editor) return;
+          const content = editor.getValue();
+          const all = CitationManager.parseAllCitations(content);
+          if (!all.length) {
             this.plugin.refreshEditorExtension();
-            new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
-              mode: getModeLabel(v, this.plugin.settings, "short"),
-              count,
-            }));
-          })();
+            return;
+          }
+          const keys = [...new Set(all.map((c: any) => c.key))];
+          const itemMap = await this.plugin.resolveItems(keys);
+          if (!itemMap) return;
+          const count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
+          this.plugin.refreshEditorExtension();
+          new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
+            mode: getModeLabel(v, this.plugin.settings, "short"),
+            count,
+          }));
         });
       });
 
@@ -204,12 +223,10 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setDesc(t(this.plugin.settings, "settings.wordDisplayDesc"))
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.showWordStyleFootnotes);
-        toggle.onChange((v: boolean) => {
-          void (async () => {
-            this.plugin.settings.showWordStyleFootnotes = v;
-            await this.plugin.saveSettings();
-            this.plugin.refreshEditorExtension();
-          })();
+        toggle.onChange(async (v: boolean) => {
+          this.plugin.settings.showWordStyleFootnotes = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshEditorExtension();
         });
       });
 
@@ -219,13 +236,11 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setDesc(t(this.plugin.settings, "settings.showToolbarDesc"))
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.showToolbar);
-        toggle.onChange((v: boolean) => {
-          void (async () => {
-            this.plugin.settings.showToolbar = v;
-            await this.plugin.saveSettings();
-            this.plugin.refreshToolbars();
-            this.display();
-          })();
+        toggle.onChange(async (v: boolean) => {
+          this.plugin.settings.showToolbar = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshToolbars();
+          this.display(); // re-render to show/hide sub-toggles
         });
       });
 
@@ -247,12 +262,10 @@ export class ZoteroSettingTab extends PluginSettingTab {
           .setName(t(this.plugin.settings, labelKey))
           .addToggle((toggle) => {
             toggle.setValue(this.plugin.settings.toolbarButtons[key]);
-            toggle.onChange((v: boolean) => {
-              void (async () => {
-                this.plugin.settings.toolbarButtons[key] = v;
-                await this.plugin.saveSettings();
-                this.plugin.refreshToolbars();
-              })();
+            toggle.onChange(async (v: boolean) => {
+              this.plugin.settings.toolbarButtons[key] = v;
+              await this.plugin.saveSettings();
+              this.plugin.refreshToolbars();
             });
           });
       }
@@ -264,22 +277,18 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setName(t(this.plugin.settings, "settings.pandocPath"))
       .setDesc(t(this.plugin.settings, "settings.pandocPathDesc"))
       .addText((text) =>
-        text.setPlaceholder("Pandoc").setValue(this.plugin.settings.pandocPath).onChange((v: string) => {
-          void (async () => {
-            this.plugin.settings.pandocPath = v.trim() || "pandoc";
-            await this.plugin.saveSettings();
-          })();
+        text.setPlaceholder("pandoc").setValue(this.plugin.settings.pandocPath).onChange(async (v: string) => {
+          this.plugin.settings.pandocPath = v.trim() || "pandoc";
+          await this.plugin.saveSettings();
         })
       );
     new Setting(containerEl)
       .setName(t(this.plugin.settings, "settings.pandocFlags"))
       .setDesc(t(this.plugin.settings, "settings.pandocFlagsDesc"))
       .addText((text) =>
-        text.setPlaceholder("").setValue(this.plugin.settings.pandocFlags).onChange((v: string) => {
-          void (async () => {
-            this.plugin.settings.pandocFlags = v.trim();
-            await this.plugin.saveSettings();
-          })();
+        text.setPlaceholder("").setValue(this.plugin.settings.pandocFlags).onChange(async (v: string) => {
+          this.plugin.settings.pandocFlags = v.trim();
+          await this.plugin.saveSettings();
         })
       );
     new Setting(containerEl)
@@ -287,12 +296,10 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setDesc(t(this.plugin.settings, "settings.useDefaultExportDirDesc"))
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.useDefaultExportDir);
-        toggle.onChange((v: boolean) => {
-          void (async () => {
-            this.plugin.settings.useDefaultExportDir = v;
-            await this.plugin.saveSettings();
-            this.display();
-          })();
+        toggle.onChange(async (v: boolean) => {
+          this.plugin.settings.useDefaultExportDir = v;
+          await this.plugin.saveSettings();
+          this.display();
         });
       });
     if (this.plugin.settings.useDefaultExportDir) {
@@ -300,18 +307,16 @@ export class ZoteroSettingTab extends PluginSettingTab {
         .setName(t(this.plugin.settings, "settings.defaultExportDir"))
         .setDesc(t(this.plugin.settings, "settings.defaultExportDirDesc"))
         .addText((text) =>
-          text.setPlaceholder("Export folder path").setValue(this.plugin.settings.exportOutputDir).onChange((v: string) => {
-            void (async () => {
-              this.plugin.settings.exportOutputDir = v.trim();
-              await this.plugin.saveSettings();
-            })();
+          text.setPlaceholder("/Users/you/Documents").setValue(this.plugin.settings.exportOutputDir).onChange(async (v: string) => {
+            this.plugin.settings.exportOutputDir = v.trim();
+            await this.plugin.saveSettings();
           })
         );
     }
 
     // ── Command list ──
     new Setting(containerEl).setName(t(this.plugin.settings, "settings.commandsSection")).setHeading();
-    const cmds = Object.values(this.plugin.getCommandLabels());
+    const cmds = Object.values(this.plugin.getCommandLabels()) as string[];
     const ul = containerEl.createEl("ul");
     for (const c of cmds) {
       ul.createEl("li", { text: c, cls: "zotero-settings-command" });
@@ -321,19 +326,75 @@ export class ZoteroSettingTab extends PluginSettingTab {
   private async checkConnection(): Promise<void> {
     this.statusDot.className = "zotero-status-dot zotero-status-unknown";
     this.statusText.textContent = t(this.plugin.settings, "settings.checking");
+
+    const port = Number(this.plugin.settings.zoteroPort) || 23119;
+    const setConnected = () => {
+      this.statusDot.className = "zotero-status-dot zotero-status-ok";
+      this.statusText.textContent = t(this.plugin.settings, "status.connected");
+    };
+    const setDisconnected = () => {
+      this.statusDot.className = "zotero-status-dot zotero-status-err";
+      this.statusText.textContent = t(this.plugin.settings, "status.disconnected");
+    };
+
+    const probeViaNodeHttp = (path: string): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const req = nodeHttp.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path,
+            method: "GET",
+            timeout: 2000,
+          },
+          (res) => {
+            const zoteroVersion = res.headers["x-zotero-version"];
+            const apiVersion = res.headers["x-zotero-connector-api-version"];
+            resolve(res.statusCode === 200 || Boolean(zoteroVersion || apiVersion));
+          }
+        );
+        req.on("error", () => resolve(false));
+        req.on("timeout", () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.end();
+      });
+    };
+
     try {
-      const r = await requestUrl({
-        url: `http://127.0.0.1:${this.plugin.settings.zoteroPort}/connector/ping`,
+      if (this.plugin.api && typeof this.plugin.api.ping === "function") {
+        const ok = await this.plugin.api.ping();
+        if (ok) {
+          setConnected();
+          return;
+        }
+      }
+
+      // Prefer Node HTTP probing: avoids requestUrl quirks in some Obsidian setups.
+      if (await probeViaNodeHttp("/connector/ping")) {
+        setConnected();
+        return;
+      }
+      if (await probeViaNodeHttp("/better-bibtex/cayw?format=json")) {
+        setConnected();
+        return;
+      }
+
+      // Final fallback: requestUrl
+      const resp = await requestUrl({
+        url: `http://127.0.0.1:${port}/connector/ping`,
         method: "GET",
         throw: false,
       });
-      if (r.status === 200) {
-        this.statusDot.className = "zotero-status-dot zotero-status-ok";
-        this.statusText.textContent = t(this.plugin.settings, "status.connected");
-      } else throw new Error();
-    } catch {
-      this.statusDot.className = "zotero-status-dot zotero-status-err";
-      this.statusText.textContent = t(this.plugin.settings, "status.disconnected");
+      if (resp.status === 200) {
+        setConnected();
+        return;
+      }
+
+      setDisconnected();
+    } catch (e) {
+      setDisconnected();
     }
   }
 }
