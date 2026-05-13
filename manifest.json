@@ -1,7 +1,7 @@
 {
   "id": "zotero-citations",
   "name": "Zotero Citations",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "minAppVersion": "1.5.7",
   "description": "Zotero citation management with Word export via Pandoc.",
   "author": "WesternGua",

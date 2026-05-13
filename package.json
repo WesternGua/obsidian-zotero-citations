@@ -1,6 +1,6 @@
 {
   "name": "zotero-citations",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Zotero citation management with Word export via Pandoc.",
   "main": "main.js",
   "scripts": {

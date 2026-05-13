@@ -6,6 +6,16 @@
 
 ---
 
+## [0.2.4] - 2026-05-13
+
+### 修复
+
+- 继续修复 Obsidian Community 审核反馈中的 TypeScript 类型安全告警（`settings.ts`、`ZoteroAPI.ts`）
+- 优化 `ReferenceDocGenerator` 的实现与依赖，消除代码混淆/动态脚本相关误报
+- 补充与稳定 release provenance 流程，确保发布资产可验证
+
+---
+
 ## [0.2.3] - 2026-05-13
 
 ### 改进
