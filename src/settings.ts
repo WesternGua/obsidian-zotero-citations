@@ -3,7 +3,7 @@
  */
 import { PluginSettingTab, Setting, App, requestUrl, Notice } from "obsidian";
 import * as nodeHttp from "http";
-import { t, getLanguage, I18N, appT } from "./i18n";
+import { t, getLanguage } from "./i18n";
 import { CitationManager } from "./CitationManager";
 
 // ── Hardcoded fallback CSL styles ──────────────────────────────────────────

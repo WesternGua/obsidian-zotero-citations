@@ -89,18 +89,20 @@ export class SearchModal extends Modal {
       if (e.key === "Escape") this.close();
     });
 
-    window.setTimeout(() => { this.searchInput.focus(); }, 50);
+    const win = (window as Window & { activeWindow?: Window }).activeWindow ?? window;
+    win.setTimeout(() => { this.searchInput.focus(); }, 50);
   }
 
   private onSearchInput(): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    const win = (window as Window & { activeWindow?: Window }).activeWindow ?? window;
+    if (this.debounceTimer) win.clearTimeout(this.debounceTimer);
     const q = this.searchInput.value.trim();
     if (!q) {
       this.resultsEl.empty();
       this.resultsEl.createEl("p", { text: appT(this.app, "search.enterQuery"), cls: "zotero-results-placeholder" });
       return;
     }
-    this.debounceTimer = window.setTimeout(() => { void this.doSearch(q); }, 300);
+    this.debounceTimer = win.setTimeout(() => { void this.doSearch(q); }, 300);
   }
 
   private async doSearch(query: string): Promise<void> {
@@ -138,8 +140,8 @@ export class SearchModal extends Modal {
     const year = CitationManager.getYear(item);
     const typeLabel = SearchModal.typeLabel(item.itemType, getAppSettings(this.app) || DEFAULT_SETTINGS);
 
-    row.createEl("div", { text: item.title, cls: "zotero-result-title" });
-    row.createEl("div", {
+    row.createDiv({ text: item.title, cls: "zotero-result-title" });
+    row.createDiv({
       text: `${authors}${authors ? " · " : ""}${year} · ${typeLabel}`,
       cls: "zotero-result-meta",
     });
@@ -182,7 +184,10 @@ export class SearchModal extends Modal {
 
   onClose(): void {
     this.contentEl.empty();
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    if (this.debounceTimer) {
+      const win = (window as Window & { activeWindow?: Window }).activeWindow ?? window;
+      win.clearTimeout(this.debounceTimer);
+    }
   }
 
   static typeLabel(itemType: string, settings: { language?: string } | Language = DEFAULT_SETTINGS): string {

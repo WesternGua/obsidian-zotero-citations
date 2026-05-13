@@ -65,15 +65,12 @@ class FnWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const wrapper = document.createElement("span");
-    wrapper.className = "zotero-fn-widget";
+    const wrapper = createSpanEl({ cls: "zotero-fn-widget" });
 
-    const sup = document.createElement("sup");
-    sup.className = "zotero-fn-num footnote-ref";
+    const sup = wrapper.createEl("sup", { cls: "zotero-fn-num footnote-ref" });
     sup.setAttribute("data-footnote-id", `fnref-${this.domId}`);
 
-    const marker = document.createElement("span");
-    marker.className = "footnote-link zotero-footnote-marker";
+    const marker = sup.createSpan({ cls: "footnote-link zotero-footnote-marker" });
     marker.setAttribute("data-footref", this.identifier);
     marker.setAttribute("tabindex", "0");
     marker.textContent = `[${this.domId}]`;
@@ -94,8 +91,6 @@ class FnWidget extends WidgetType {
       edit: this.preview.edit || undefined,
     });
 
-    sup.appendChild(marker);
-    wrapper.appendChild(sup);
     return wrapper;
   }
 
@@ -116,7 +111,7 @@ class FnWidget extends WidgetType {
 export function createFootnoteExtension(options: FootnoteExtensionOptions) {
   return ViewPlugin.fromClass(
     class {
-      decorations: any;
+      decorations: ReturnType<typeof buildDeco>;
       constructor(view: EditorView) {
         this.decorations = buildDeco(view, options);
       }
@@ -126,7 +121,7 @@ export function createFootnoteExtension(options: FootnoteExtensionOptions) {
         }
       }
     },
-    { decorations: (v: any) => v.decorations },
+    { decorations: (v) => v.decorations },
   );
 }
 
@@ -349,6 +344,28 @@ type AppWithPlugins = App & {
   };
 };
 
+function getActiveWindow(): Window {
+  const maybeWin = window as Window & { activeWindow?: Window };
+  return maybeWin.activeWindow ?? window;
+}
+
+function getActiveDocument(): Document {
+  const maybeWin = window as Window & { activeDocument?: Document };
+  return maybeWin.activeDocument ?? document;
+}
+
+function createDivEl(options?: { cls?: string }): HTMLDivElement {
+  const el = getActiveDocument().createElement("div");
+  if (options?.cls) el.className = options.cls;
+  return el;
+}
+
+function createSpanEl(options?: { cls?: string }): HTMLSpanElement {
+  const el = getActiveDocument().createElement("span");
+  if (options?.cls) el.className = options.cls;
+  return el;
+}
+
 function attachRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   const show = () => showRenderedPopover(target, spec);
   const scheduleHide = () => schedulePopoverHide(target);
@@ -371,8 +388,7 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   }
   destroyActivePopover();
 
-  const popover = document.createElement("div");
-  popover.className = "popover hover-popover zotero-footnote-popover";
+  const popover = createDivEl({ cls: "popover hover-popover zotero-footnote-popover" });
 
   const embed = popover.createDiv({ cls: "markdown-embed", attr: { "data-type": "footnote" } });
   const embedContent = embed.createDiv({ cls: "markdown-embed-content" });
@@ -384,15 +400,15 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   }
   if (!spec.markdown.trim()) embed.addClass("mod-empty");
 
-  document.body.appendChild(popover);
+  getActiveDocument().body.appendChild(popover);
   const component = new Component();
   const reposition = () => positionPopover(target, popover);
   const onPopoverEnter = () => cancelPopoverHide();
   const onPopoverLeave = () => schedulePopoverHide(target);
   popover.addEventListener("mouseenter", onPopoverEnter);
   popover.addEventListener("mouseleave", onPopoverLeave);
-  window.addEventListener("scroll", reposition, true);
-  window.addEventListener("resize", reposition);
+  getActiveWindow().addEventListener("scroll", reposition, true);
+  getActiveWindow().addEventListener("resize", reposition);
 
   activePopover = { target, popover, component, hideTimer: null, reposition, onPopoverEnter, onPopoverLeave };
   reposition();
@@ -470,9 +486,9 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
   const popoverRect = popover.getBoundingClientRect();
   let top = rect.top - popoverRect.height - gap;
   if (top < margin) top = rect.bottom + gap;
-  top = Math.max(margin, Math.min(window.innerHeight - popoverRect.height - margin, top));
+  top = Math.max(margin, Math.min(getActiveWindow().innerHeight - popoverRect.height - margin, top));
   const left = Math.min(
-    window.innerWidth - popoverRect.width - margin,
+    getActiveWindow().innerWidth - popoverRect.width - margin,
     Math.max(margin, rect.left + rect.width / 2 - popoverRect.width / 2),
   );
   popover.style.top = `${top}px`;
@@ -482,25 +498,25 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
 function schedulePopoverHide(target: HTMLElement): void {
   if (!activePopover || activePopover.target !== target) return;
   cancelPopoverHide();
-  activePopover.hideTimer = window.setTimeout(() => {
+  activePopover.hideTimer = getActiveWindow().setTimeout(() => {
     if (activePopover?.target === target) destroyActivePopover();
   }, 80);
 }
 
 function cancelPopoverHide(): void {
   if (!activePopover?.hideTimer) return;
-  window.clearTimeout(activePopover.hideTimer);
+  getActiveWindow().clearTimeout(activePopover.hideTimer);
   activePopover.hideTimer = null;
 }
 
 function destroyActivePopover(): void {
   if (!activePopover) return;
   const { popover, component, reposition, onPopoverEnter, onPopoverLeave, hideTimer } = activePopover;
-  if (hideTimer) window.clearTimeout(hideTimer);
+  if (hideTimer) getActiveWindow().clearTimeout(hideTimer);
   popover.removeEventListener("mouseenter", onPopoverEnter);
   popover.removeEventListener("mouseleave", onPopoverLeave);
-  window.removeEventListener("scroll", reposition, true);
-  window.removeEventListener("resize", reposition);
+  getActiveWindow().removeEventListener("scroll", reposition, true);
+  getActiveWindow().removeEventListener("resize", reposition);
   component.unload();
   popover.remove();
   activePopover = null;

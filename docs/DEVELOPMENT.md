@@ -12,7 +12,7 @@ zotero-citations/
 ├── CHANGELOG.md
 ├── LICENSE
 ├── README.md
-├── README_EN.md
+├── README_zh.md
 ├── RELEASE_NOTES.md
 ├── esbuild.config.mjs
 ├── manifest.json

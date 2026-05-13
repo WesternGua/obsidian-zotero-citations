@@ -10,47 +10,47 @@ sup.zotero-fn-num,
 }
 
 sup.zotero-fn-num > .zotero-footnote-marker {
-  color: var(--text-accent) !important;
+  color: var(--text-accent);
   display: inline;
   font-size: 0.75em;
   font-weight: 500;
   cursor: pointer;
   font-family: var(--font-text);
   pointer-events: auto;
-  text-decoration: none !important;
-  box-shadow: none !important;
-  border: none !important;
+  text-decoration: none;
+  box-shadow: none;
+  border: none;
 }
 
 sup.zotero-fn-num > .zotero-footnote-marker:hover,
 sup.zotero-fn-num > .zotero-footnote-marker:focus-visible {
-  color: var(--text-accent-hover, var(--text-accent)) !important;
-  text-decoration: none !important;
+  color: var(--text-accent-hover, var(--text-accent));
+  text-decoration: none;
   outline: none;
 }
 
 .zotero-fn-widget.zotero-fn-highlighted {
-  background: var(--text-highlight-bg) !important;
-  color: var(--text-normal) !important;
-  box-shadow: none !important;
-  border: none !important;
+  background: var(--text-highlight-bg);
+  color: var(--text-normal);
+  box-shadow: none;
+  border: none;
 }
 
 .zotero-fn-widget.zotero-fn-highlighted > sup.zotero-fn-num,
 .zotero-fn-widget.zotero-fn-highlighted > sup.zotero-fn-num > .zotero-footnote-marker,
 mark .zotero-rendered-footnote-sup,
 mark .zotero-rendered-footnote-ref {
-  background: transparent !important;
-  box-shadow: none !important;
-  border: none !important;
+  background: transparent;
+  box-shadow: none;
+  border: none;
 }
 
 a.zotero-rendered-footnote-ref {
   color: var(--text-accent);
   font-size: 0.75em;
   text-decoration: none;
-  box-shadow: none !important;
-  border: none !important;
+  box-shadow: none;
+  border: none;
 }
 
 .zotero-footnote-popover {
@@ -169,16 +169,10 @@ a.zotero-rendered-footnote-ref {
 }
 
 /* Modals */
-.modal:has(.zotero-prefs-modal),
-.modal:has(.zotero-unlink-modal),
-.modal:has(.zotero-search-modal) {
-  padding-top: 12px;
-}
-
 .zotero-prefs-modal,
 .zotero-unlink-modal,
 .zotero-search-modal {
-  padding-top: 0 !important;
+  padding-top: 12px;
 }
 
 .zotero-prefs-section {

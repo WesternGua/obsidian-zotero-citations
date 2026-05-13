@@ -38,7 +38,8 @@ export class ExportModal extends Modal {
     const confirm = btnRow.createEl("button", { text: appT(this.app, "common.export"), cls: "mod-cta" });
     confirm.addEventListener("click", () => this.doConfirm());
 
-    setTimeout(() => {
+    const win = (window as Window & { activeWindow?: Window }).activeWindow ?? window;
+    win.setTimeout(() => {
       this.input.focus();
       this.input.select();
     }, 50);
