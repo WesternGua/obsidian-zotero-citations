@@ -9,11 +9,11 @@
 ## Highlights
 
 - **Insert citations** — Invokes Zotero's native citation picker or an in-plugin search modal, with support for page/paragraph locators
-- **Footnote & endnote** — Freely switch between footnote mode (`^[citation text]`) and endnote mode (`[^1]` + endnote definitions)
+- **Footnote / endnote / in-text** — Freely switch between footnote mode (`^[citation text]`), endnote mode (`[^1]` + endnote definitions), and in-text mode (plain-text author-year citations)
 - **Word-style display** — Footnote markers render as superscript numbers in the editor; hover to preview the full citation and edit locators
 - **Document preferences** — Dynamically reads all CSL styles installed in Zotero, with one-click style and mode switching
 - **Bibliography** — Auto-generates a formatted reference list from all citations in the current document
-- **Export to Word** — Converts Markdown to `.docx` via Pandoc, preserving footnote/endnote structure
+- **Export to Word** — Converts Markdown to `.docx` via Pandoc; footnote/endnote modes preserve note structure, while in-text mode exports citations as plain paragraph text
 - **Bilingual UI** — Switch between Chinese and English in settings
 
 ---
@@ -66,7 +66,7 @@ Search for `Insert citation` in the command palette, or click the citation icon 
 
 The plugin will first try to open Zotero's native citation picker — search for items, add a page number or other locator, and confirm with the checkmark button.
 
-Inserted citations appear as footnotes or endnotes depending on your current citation mode setting.
+Inserted citations follow your current citation mode setting (footnote, endnote, or in-text).
 
 > **Note**:
 > - The plugin writes hidden metadata (`<!-- zotero:ITEMKEY:locator -->`) at the beginning of each note. Do not remove it manually, or the plugin will not be able to track the citation.
@@ -97,7 +97,7 @@ Run `Insert bibliography` to generate a formatted reference list at the cursor p
 1. Run `Check whether Pandoc is available` first to confirm Pandoc is working.
 2. Run `Export to Word (.docx)`.
 
-The exported Word document contains properly formatted footnotes, with body text in SimSun 12pt, 1.5 line spacing, justified alignment, first-line indent, and headings in SimHei.
+In footnote/endnote mode, the exported Word document keeps properly formatted notes. In in-text mode, citations are exported as plain author-year text in the main paragraph. Body text is SimSun 12pt, 1.5 line spacing, justified alignment, first-line indent, and headings in SimHei.
 
 ![en-export-to-word-preview](assets/screenshots/en-export-to-word-preview.png)
 
@@ -115,7 +115,7 @@ The exported Word document contains properly formatted footnotes, with body text
 |---------|-------------|
 | Interface language | Chinese / English |
 | Default CSL style | Format used for newly inserted citations |
-| Citation mode | Footnote / Endnote |
+| Citation mode | Footnote / Endnote / In-text |
 | Word-style footnote display | Superscript numbers + hover preview |
 | Title bar buttons | Master toggle + 6 individual toggles (Insert citation, Toggle Word-style footnote display, Refresh all citations, Change citation style, Unlink citations, Export to Word), each controllable independently in settings |
 | Pandoc path | Defaults to `pandoc`; accepts full paths |

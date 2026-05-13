@@ -4,53 +4,71 @@
   vertical-align: baseline;
 }
 
+.zotero-intext-widget {
+  display: inline;
+  vertical-align: baseline;
+}
+
+.zotero-intext-marker {
+  display: inline;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.zotero-intext-marker:hover,
+.zotero-intext-marker:focus-visible {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  outline: none;
+}
+
 sup.zotero-fn-num,
 .zotero-rendered-footnote-sup {
   line-height: 0;
 }
 
 sup.zotero-fn-num > .zotero-footnote-marker {
-  color: var(--text-accent);
+  color: var(--text-accent) !important;
   display: inline;
   font-size: 0.75em;
   font-weight: 500;
   cursor: pointer;
   font-family: var(--font-text);
   pointer-events: auto;
-  text-decoration: none;
-  box-shadow: none;
-  border: none;
+  text-decoration: none !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 
 sup.zotero-fn-num > .zotero-footnote-marker:hover,
 sup.zotero-fn-num > .zotero-footnote-marker:focus-visible {
-  color: var(--text-accent-hover, var(--text-accent));
-  text-decoration: none;
+  color: var(--text-accent-hover, var(--text-accent)) !important;
+  text-decoration: none !important;
   outline: none;
 }
 
 .zotero-fn-widget.zotero-fn-highlighted {
-  background: var(--text-highlight-bg);
-  color: var(--text-normal);
-  box-shadow: none;
-  border: none;
+  background: var(--text-highlight-bg) !important;
+  color: var(--text-normal) !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 
 .zotero-fn-widget.zotero-fn-highlighted > sup.zotero-fn-num,
 .zotero-fn-widget.zotero-fn-highlighted > sup.zotero-fn-num > .zotero-footnote-marker,
 mark .zotero-rendered-footnote-sup,
 mark .zotero-rendered-footnote-ref {
-  background: transparent;
-  box-shadow: none;
-  border: none;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 
 a.zotero-rendered-footnote-ref {
   color: var(--text-accent);
   font-size: 0.75em;
   text-decoration: none;
-  box-shadow: none;
-  border: none;
+  box-shadow: none !important;
+  border: none !important;
 }
 
 .zotero-footnote-popover {
@@ -169,10 +187,16 @@ a.zotero-rendered-footnote-ref {
 }
 
 /* Modals */
+.modal:has(.zotero-prefs-modal),
+.modal:has(.zotero-unlink-modal),
+.modal:has(.zotero-search-modal) {
+  padding-top: 12px;
+}
+
 .zotero-prefs-modal,
 .zotero-unlink-modal,
 .zotero-search-modal {
-  padding-top: 12px;
+  padding-top: 0 !important;
 }
 
 .zotero-prefs-section {

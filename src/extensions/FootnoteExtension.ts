@@ -3,7 +3,6 @@
  */
 import { App, Component, MarkdownRenderer, MarkdownView, Notice } from "obsidian";
 import { ViewPlugin, WidgetType, Decoration, EditorView, ViewUpdate } from "@codemirror/view";
-import type { Range } from "@codemirror/state";
 import { appT } from "../i18n";
 import { CitationManager } from "../CitationManager";
 import { ZoteroItem } from "../ZoteroAPI";
@@ -17,11 +16,20 @@ export interface FootnoteExtensionOptions {
 interface PreviewInfo {
   markdown: string;
   text: string;
+  display: "footnote" | "intext";
   edit?: EditInfo | null;
 }
 
 interface InlineEditInfo {
-  kind: "inline" | "endnote";
+  kind: "inline";
+  key: string;
+  locator: string;
+  from: number;
+  to: number;
+}
+
+interface InTextEditInfo {
+  kind: "intext";
   key: string;
   locator: string;
   from: number;
@@ -37,7 +45,7 @@ interface EndnoteEditInfo {
   to: number;
 }
 
-type EditInfo = Omit<InlineEditInfo, "kind"> & { kind: "inline" } | EndnoteEditInfo;
+type EditInfo = InlineEditInfo | InTextEditInfo | EndnoteEditInfo;
 
 // ── Widget ─────────────────────────────────────────────────────────────────
 class FnWidget extends WidgetType {
@@ -66,25 +74,39 @@ class FnWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const wrapper = createSpanEl({ cls: "zotero-fn-widget" });
-
-    const sup = wrapper.createEl("sup", { cls: "zotero-fn-num footnote-ref" });
-    sup.setAttribute("data-footnote-id", `fnref-${this.domId}`);
-
-    const marker = sup.createSpan({ cls: "footnote-link zotero-footnote-marker" });
-    marker.setAttribute("data-footref", this.identifier);
-    marker.setAttribute("tabindex", "0");
-    marker.textContent = `[${this.domId}]`;
+    const wrapper = document.createElement("span");
+    wrapper.className = this.preview.display === "intext" ? "zotero-intext-widget" : "zotero-fn-widget";
 
     if (this.isHighlighted) {
       wrapper.classList.add("zotero-fn-highlighted", "cm-highlight");
     }
 
     const text = this.preview.text || appT(this.app, "footnote.fallback", { value: this.num });
-    marker.addEventListener("mousedown", (event) => event.preventDefault());
-    marker.addEventListener("click", (event) => event.preventDefault());
+    const target = this.preview.display === "intext"
+      ? document.createElement("span")
+      : document.createElement("span");
 
-    attachRenderedPopover(marker, {
+    if (this.preview.display === "intext") {
+      target.className = "zotero-intext-marker";
+      target.textContent = this.preview.markdown || text;
+      target.setAttribute("tabindex", "0");
+    } else {
+      const sup = document.createElement("sup");
+      sup.className = "zotero-fn-num footnote-ref";
+      sup.setAttribute("data-footnote-id", `fnref-${this.domId}`);
+
+      target.className = "footnote-link zotero-footnote-marker";
+      target.setAttribute("data-footref", this.identifier);
+      target.setAttribute("tabindex", "0");
+      target.textContent = `[${this.domId}]`;
+      sup.appendChild(target);
+      wrapper.appendChild(sup);
+    }
+
+    target.addEventListener("mousedown", (event) => event.preventDefault());
+    target.addEventListener("click", (event) => event.preventDefault());
+
+    attachRenderedPopover(target, {
       app: this.app,
       getSourcePath: this.getSourcePath,
       markdown: this.preview.markdown,
@@ -92,6 +114,9 @@ class FnWidget extends WidgetType {
       edit: this.preview.edit || undefined,
     });
 
+    if (this.preview.display === "intext") {
+      wrapper.appendChild(target);
+    }
     return wrapper;
   }
 
@@ -112,7 +137,7 @@ class FnWidget extends WidgetType {
 export function createFootnoteExtension(options: FootnoteExtensionOptions) {
   return ViewPlugin.fromClass(
     class {
-      decorations: ReturnType<typeof buildDeco>;
+      decorations: any;
       constructor(view: EditorView) {
         this.decorations = buildDeco(view, options);
       }
@@ -122,21 +147,23 @@ export function createFootnoteExtension(options: FootnoteExtensionOptions) {
         }
       }
     },
-    { decorations: (v) => v.decorations },
+    { decorations: (v: any) => v.decorations },
   );
 }
 
 function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
-  if (!options.isEnabled()) return Decoration.none;
-
   const doc = view.state.doc.toString();
+  const renderFootnoteMarkers = options.isEnabled();
+  const inTextCitations = CitationManager.parseInTextCitations(doc);
+  if (!renderFootnoteMarkers && !inTextCitations.length) return Decoration.none;
+
   const sel = view.state.selection.main;
   const endnotePreviews = buildEndnotePreviewMap(doc, options.app);
 
   const hits: Array<{
     start: number; end: number; num: number;
     markdown: string; text: string; identifier: string;
-    domId: string; edit?: EditInfo | null;
+    domId: string; display: "footnote" | "intext"; edit?: EditInfo | null;
   }> = [];
 
   const tokenRe = /\^\[(?:[^\]\\]|\\.)*\]|\[\^([^\]\n]+)\](?!:)/g;
@@ -150,11 +177,12 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
     const raw = m[0];
     if (raw.startsWith("^[")) {
       const preview = extractInlinePreview(raw, sequence, options.app);
+      if (preview.display !== "intext" && !renderFootnoteMarkers) continue;
       if (preview.edit) {
         preview.edit.from = m.index;
         preview.edit.to = m.index + raw.length;
       }
-      sequence++;
+      if (preview.display !== "intext") sequence++;
       hits.push({
         start: m.index, end: m.index + raw.length,
         num: sequence, identifier: `[inline${inlineSerial}]`,
@@ -167,6 +195,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
     const lineStart = doc.lastIndexOf("\n", m.index - 1) + 1;
     const before = doc.slice(lineStart, m.index);
     if (/^\s*$/.test(before)) continue;
+    if (!renderFootnoteMarkers) continue;
 
     const label = m[1].trim().toLowerCase();
     let ordinal = refOrder.get(label);
@@ -184,15 +213,40 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
       start: m.index, end: m.index + raw.length,
       num: ordinal, identifier: label,
       domId: repeatCount > 0 ? `${ordinal}-${repeatCount}` : `${ordinal}`,
-      ...(endnotePreview ?? { markdown: "", text: appT(options.app, "footnote.fallback", { value: ordinal }) }),
+      ...(endnotePreview ?? {
+        markdown: "",
+        text: appT(options.app, "footnote.fallback", { value: ordinal }),
+        display: "footnote" as const,
+      }),
+    });
+  }
+
+  for (const legacy of inTextCitations) {
+    if (!legacy.fullMatch.startsWith("<!-- zotero-inline:")) continue;
+    hits.push({
+      start: legacy.index,
+      end: legacy.index + legacy.fullMatch.length,
+      num: 0,
+      markdown: legacy.formattedText,
+      text: normalizeTooltipText(legacy.formattedText),
+      identifier: `[intext-legacy-${legacy.index}]`,
+      domId: `intext-${legacy.index}`,
+      display: "intext",
+      edit: {
+        kind: "intext",
+        key: legacy.key,
+        locator: legacy.page,
+        from: legacy.index,
+        to: legacy.index + legacy.fullMatch.length,
+      },
     });
   }
 
   hits.sort((a, b) => a.start - b.start);
-  const ranges: Range<Decoration>[] = [];
+  const ranges: any[] = [];
   let lastEnd = -1;
 
-  for (const { start, end, num, markdown, text, identifier, domId, edit } of hits) {
+  for (const { start, end, num, markdown, text, identifier, domId, display, edit } of hits) {
     if (start < lastEnd) continue;
     if (sel.from <= end && sel.to >= start) continue;
     if (!inViewport(view, start, end)) continue;
@@ -200,7 +254,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
     ranges.push(
       Decoration.replace({
         widget: new FnWidget(
-          num, { markdown, text, edit }, options.app,
+          num, { markdown, text, display, edit }, options.app,
           options.getSourcePath, identifier, domId,
           isInsideHighlight(doc, start, end),
         ),
@@ -250,20 +304,29 @@ function countHighlightDelimiters(text: string): number {
   return count;
 }
 
-function extractInlinePreview(rawMarker: string, num: number, app: App): { markdown: string; text: string; edit?: EditInfo | null } {
+function extractInlinePreview(rawMarker: string, num: number, app: App): { markdown: string; text: string; display: "footnote" | "intext"; edit?: EditInfo | null } {
   const body = rawMarker.slice(2, -1);
   const metadata = parseZoteroMetadata(body);
   const markdown = metadata.markdown.trim();
   const text = normalizeTooltipText(markdown);
+  if (metadata.kind === "intext") {
+    return {
+      markdown,
+      text: text || appT(app, "footnote.fallback", { value: num }),
+      display: "intext",
+      edit: metadata.key ? { kind: "intext", key: metadata.key, locator: metadata.locator, from: -1, to: -1 } : null,
+    };
+  }
   return {
     markdown,
     text: text || appT(app, "footnote.fallback", { value: num }),
+    display: "footnote",
     edit: metadata.key ? { kind: "inline", key: metadata.key, locator: metadata.locator, from: -1, to: -1 } : null,
   };
 }
 
-function buildEndnotePreviewMap(doc: string, app: App): Map<string, { markdown: string; text: string; edit?: EditInfo | null }> {
-  const map = new Map<string, { markdown: string; text: string; edit?: EditInfo | null }>();
+function buildEndnotePreviewMap(doc: string, app: App): Map<string, { markdown: string; text: string; display: "footnote" | "intext"; edit?: EditInfo | null }> {
+  const map = new Map<string, { markdown: string; text: string; display: "footnote" | "intext"; edit?: EditInfo | null }>();
   const lines = doc.split("\n");
   const lineOffsets: number[] = [];
   let docOffset = 0;
@@ -298,6 +361,7 @@ function buildEndnotePreviewMap(doc: string, app: App): Map<string, { markdown: 
     map.set(label, {
       markdown,
       text: normalizeTooltipText(markdown) || appT(app, "footnote.fallback", { value: label }),
+      display: "footnote",
       edit: metadata.key ? {
         kind: "endnote", key: metadata.key, locator: metadata.locator,
         label: match[1], from: lineOffsets[i], to: lineOffsets[endLine] + lines[endLine].length,
@@ -308,10 +372,26 @@ function buildEndnotePreviewMap(doc: string, app: App): Map<string, { markdown: 
   return map;
 }
 
-function parseZoteroMetadata(text: string): { key: string; locator: string; markdown: string } {
-  const match = text.match(/^<!--\s*zotero:([^:>]+):([^ ]*)\s*-->\s*/);
-  if (!match) return { key: "", locator: "", markdown: text };
-  return { key: match[1], locator: decodeURIComponent(match[2] || ""), markdown: text.slice(match[0].length) };
+function parseZoteroMetadata(text: string): { kind: "inline" | "intext" | "none"; key: string; locator: string; markdown: string } {
+  const inlineMatch = text.match(/^<!--\s*zotero:([^:>]+):([^ ]*)\s*-->\s*/);
+  if (inlineMatch) {
+    return {
+      kind: "inline",
+      key: inlineMatch[1],
+      locator: decodeURIComponent(inlineMatch[2] || ""),
+      markdown: text.slice(inlineMatch[0].length),
+    };
+  }
+  const inTextMatch = text.match(/^<!--\s*zotero-intext:([^:>]+):([^ ]*)\s*-->\s*/);
+  if (inTextMatch) {
+    return {
+      kind: "intext",
+      key: inTextMatch[1],
+      locator: decodeURIComponent(inTextMatch[2] || ""),
+      markdown: text.slice(inTextMatch[0].length),
+    };
+  }
+  return { kind: "none", key: "", locator: "", markdown: text };
 }
 
 function normalizeTooltipText(text: string): string {
@@ -345,28 +425,6 @@ type AppWithPlugins = App & {
   };
 };
 
-function getActiveWindow(): Window {
-  const maybeWin = window as Window & { activeWindow?: Window };
-  return maybeWin.activeWindow ?? window;
-}
-
-function getActiveDocument(): Document {
-  const maybeWin = window as Window & { activeDocument?: Document };
-  return maybeWin.activeDocument ?? getActiveWindow().document;
-}
-
-function createDivEl(options?: { cls?: string }): HTMLDivElement {
-  const el = getActiveDocument().createElement("div");
-  if (options?.cls) el.className = options.cls;
-  return el;
-}
-
-function createSpanEl(options?: { cls?: string }): HTMLSpanElement {
-  const el = getActiveDocument().createElement("span");
-  if (options?.cls) el.className = options.cls;
-  return el;
-}
-
 function attachRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   const show = () => showRenderedPopover(target, spec);
   const scheduleHide = () => schedulePopoverHide(target);
@@ -389,7 +447,8 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   }
   destroyActivePopover();
 
-  const popover = createDivEl({ cls: "popover hover-popover zotero-footnote-popover" });
+  const popover = document.createElement("div");
+  popover.className = "popover hover-popover zotero-footnote-popover";
 
   const embed = popover.createDiv({ cls: "markdown-embed", attr: { "data-type": "footnote" } });
   const embedContent = embed.createDiv({ cls: "markdown-embed-content" });
@@ -401,19 +460,19 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   }
   if (!spec.markdown.trim()) embed.addClass("mod-empty");
 
-  getActiveDocument().body.appendChild(popover);
+  document.body.appendChild(popover);
   const component = new Component();
   const reposition = () => positionPopover(target, popover);
   const onPopoverEnter = () => cancelPopoverHide();
   const onPopoverLeave = () => schedulePopoverHide(target);
   popover.addEventListener("mouseenter", onPopoverEnter);
   popover.addEventListener("mouseleave", onPopoverLeave);
-  getActiveWindow().addEventListener("scroll", reposition, true);
-  getActiveWindow().addEventListener("resize", reposition);
+  window.addEventListener("scroll", reposition, true);
+  window.addEventListener("resize", reposition);
 
   activePopover = { target, popover, component, hideTimer: null, reposition, onPopoverEnter, onPopoverLeave };
   reposition();
-  getActiveWindow().requestAnimationFrame(reposition);
+  requestAnimationFrame(reposition);
 
   if (spec.markdown.trim()) {
     void renderPopoverMarkdown(preview, spec, component, target, reposition);
@@ -426,8 +485,8 @@ async function renderPopoverMarkdown(preview: HTMLElement, spec: PopoverSpec, co
     await MarkdownRenderer.render(spec.app, spec.markdown, preview, spec.getSourcePath(), component);
     if (activePopover?.target !== target) return;
     reposition();
-    getActiveWindow().requestAnimationFrame(reposition);
-  } catch {
+    requestAnimationFrame(reposition);
+  } catch (e) {
     if (!preview.textContent?.trim()) preview.setText(spec.fallbackText);
   }
 }
@@ -473,6 +532,9 @@ async function applyLocatorEdit(spec: PopoverSpec, locator: string): Promise<boo
   if (edit.kind === "inline") {
     const replacement = CitationManager.buildInlineFootnote(item, style, page);
     editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+  } else if (edit.kind === "intext") {
+    const replacement = CitationManager.buildInTextCitation(item, style, page);
+    editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
   } else {
     const replacement = CitationManager.buildEndnoteDef(edit.label, item, style, page);
     editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
@@ -487,9 +549,9 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
   const popoverRect = popover.getBoundingClientRect();
   let top = rect.top - popoverRect.height - gap;
   if (top < margin) top = rect.bottom + gap;
-  top = Math.max(margin, Math.min(getActiveWindow().innerHeight - popoverRect.height - margin, top));
+  top = Math.max(margin, Math.min(window.innerHeight - popoverRect.height - margin, top));
   const left = Math.min(
-    getActiveWindow().innerWidth - popoverRect.width - margin,
+    window.innerWidth - popoverRect.width - margin,
     Math.max(margin, rect.left + rect.width / 2 - popoverRect.width / 2),
   );
   popover.style.top = `${top}px`;
@@ -499,25 +561,25 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
 function schedulePopoverHide(target: HTMLElement): void {
   if (!activePopover || activePopover.target !== target) return;
   cancelPopoverHide();
-  activePopover.hideTimer = getActiveWindow().setTimeout(() => {
+  activePopover.hideTimer = window.setTimeout(() => {
     if (activePopover?.target === target) destroyActivePopover();
   }, 80);
 }
 
 function cancelPopoverHide(): void {
   if (!activePopover?.hideTimer) return;
-  getActiveWindow().clearTimeout(activePopover.hideTimer);
+  window.clearTimeout(activePopover.hideTimer);
   activePopover.hideTimer = null;
 }
 
 function destroyActivePopover(): void {
   if (!activePopover) return;
   const { popover, component, reposition, onPopoverEnter, onPopoverLeave, hideTimer } = activePopover;
-  if (hideTimer) getActiveWindow().clearTimeout(hideTimer);
+  if (hideTimer) window.clearTimeout(hideTimer);
   popover.removeEventListener("mouseenter", onPopoverEnter);
   popover.removeEventListener("mouseleave", onPopoverLeave);
-  getActiveWindow().removeEventListener("scroll", reposition, true);
-  getActiveWindow().removeEventListener("resize", reposition);
+  window.removeEventListener("scroll", reposition, true);
+  window.removeEventListener("resize", reposition);
   component.unload();
   popover.remove();
   activePopover = null;
