@@ -82,7 +82,7 @@ With Word-style footnote display enabled, hover over a superscript number to pre
 
 ### 3. Switch Citation Style
 
-Run `Document preferences` to open the preferences panel. The plugin dynamically reads all CSL styles installed in your Zotero and presents them in a searchable list. Pick a style, optionally switch between footnote/endnote mode, and apply the change to all citations in the current document at once:
+Run `Document preferences` to open the preferences panel. The plugin dynamically reads all CSL styles installed in your Zotero and presents them in a searchable list. Pick a style, optionally switch between footnote/endnote/in-text mode, and apply the change to all citations in the current document at once:
 
 ![en-preferences](assets/screenshots/en-preferences.png)
 
