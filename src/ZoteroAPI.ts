@@ -677,8 +677,8 @@ ORDER BY i.key, ic.orderIndex;`;
     } else {
       const issued = isRecord(record.issued) ? record.issued : undefined;
       const dateParts = issued?.["date-parts"];
-      const firstDatePart = Array.isArray(dateParts) ? dateParts[0] : undefined;
-      const y = Array.isArray(firstDatePart) && firstDatePart.length > 0 ? firstDatePart[0] : undefined;
+      const firstDatePart = isUnknownArray(dateParts) ? dateParts[0] : undefined;
+      const y = isUnknownArray(firstDatePart) && firstDatePart.length > 0 ? firstDatePart[0] : undefined;
       if (typeof y === "number" || typeof y === "string") date = String(y);
     }
 
@@ -715,6 +715,10 @@ ORDER BY i.key, ic.orderIndex;`;
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
 }
 
 function asJsonRpcResponse(value: unknown): JsonRpcResponse {
