@@ -6,6 +6,29 @@
 
 ---
 
+## [0.2.5] - 2026-05-13
+
+### 修复
+
+- 按最新 Community Review 报告完成设置页与代码规范修复：
+  - 设置页标题不再包含插件名；
+  - 移除未使用常量与未使用导入；
+  - 调整若干 UI 文案为 sentence case。
+- 完成 TypeScript/ESLint 严格规则对齐：
+  - 移除 `require()` 风格导入，统一为 ESM 导入；
+  - 清理 `any` 相关的 unsafe assignment / call / member access / argument 警告；
+  - 修复 Promise 使用规范（`void` 标注、事件回调中异步调用方式等）。
+- 对齐文内引用（In-text）实现与导出链路：
+  - Obsidian 内仍可作为插件管理引用统一刷新与编辑；
+  - Word 导出时文内引用按正文文本输出，不转成脚注。
+
+### 发布
+
+- 更新 release 资产并重新发布，包含 `main.js`、`manifest.json`、`styles.css`。
+- 继续使用 GitHub artifact attestation 工作流为发布资产提供 provenance。
+
+---
+
 ## [0.2.4] - 2026-05-13
 
 ### 新增

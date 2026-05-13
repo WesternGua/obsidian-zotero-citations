@@ -22,6 +22,24 @@
   outline: none;
 }
 
+.zotero-intext-widget {
+  display: inline;
+  vertical-align: baseline;
+}
+
+.zotero-intext-marker {
+  display: inline;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.zotero-intext-marker:hover,
+.zotero-intext-marker:focus-visible {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  outline: none;
+}
+
 sup.zotero-fn-num,
 .zotero-rendered-footnote-sup {
   line-height: 0;

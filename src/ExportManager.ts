@@ -2,15 +2,14 @@
  * ExportManager.ts – Pandoc export and reference document generation
  */
 import { Notice, Platform } from "obsidian";
+import { exec } from "child_process";
+import * as path from "path";
+import * as os from "os";
+import * as fs from "fs/promises";
+import { promisify } from "util";
 import { t } from "./i18n";
 import { ZoteroCitationsSettings, DEFAULT_SETTINGS } from "./settings";
 import { CitationManager } from "./CitationManager";
-
-const { exec } = require("child_process");
-const path = require("path");
-const os = require("os");
-const fs = require("fs/promises");
-const { promisify } = require("util");
 
 export const execAsync = promisify(exec);
 
@@ -53,9 +52,9 @@ export class ExportManager {
     ].filter(Boolean).join(" ");
     try {
       await execAsync(cmd, { timeout: 120000, env: buildEnv() });
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw new ExportError(t(settings, "export.pandocFailed", {
-        error: err.stderr ?? err.message ?? String(err),
+        error: getErrorMessage(err),
       }));
     } finally {
       await prepared.cleanup();
@@ -90,21 +89,8 @@ export class ExportManager {
     return out;
   }
 
-  static async showNativeSaveDialog(defaultPath: string, settings: ZoteroCitationsSettings = DEFAULT_SETTINGS): Promise<string | null | undefined> {
-    try {
-      const electron = require("electron");
-      const dialog = (electron.remote ?? electron)?.dialog;
-      if (!dialog?.showSaveDialog) return undefined;
-      const result = await dialog.showSaveDialog({
-        title: t(settings, "export.dialogTitle"),
-        defaultPath,
-        filters: [{ name: t(settings, "export.filterName"), extensions: ["docx"] }],
-        properties: ["createDirectory", "showOverwriteConfirmation"],
-      });
-      return result.canceled ? null : result.filePath ?? undefined;
-    } catch (e) {
-      return undefined;
-    }
+  static showNativeSaveDialog(_defaultPath: string, _settings: ZoteroCitationsSettings = DEFAULT_SETTINGS): string | null | undefined {
+    return undefined;
   }
 
   static suggestOutputPath(inputPath: string, settings: ZoteroCitationsSettings): string {
@@ -120,7 +106,7 @@ export class ExportManager {
     try {
       const { stdout } = await execAsync(`${ExportManager.q(pandoc)} --version`, { timeout: 10000, env: buildEnv() });
       new Notice(`✓ ${stdout.split("\n")[0].trim()}`, 4000);
-    } catch (e) {
+    } catch {
       new Notice(t(settings, "export.pandocMissing", { pandoc }), 8000);
     }
   }
@@ -138,4 +124,14 @@ export class ExportError extends Error {
     super(msg);
     this.name = "ExportError";
   }
+}
+
+function getErrorMessage(err: unknown): string {
+  if (typeof err === "object" && err !== null) {
+    const stderr = "stderr" in err ? err.stderr : undefined;
+    if (typeof stderr === "string" && stderr.trim()) return stderr;
+    const message = "message" in err ? err.message : undefined;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return String(err);
 }

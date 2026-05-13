@@ -62,7 +62,7 @@ export interface CitationRef {
 
 // ── Constants ─────────────────────────────────────────────────────────────
 const KEY_PAT = "[A-Za-z0-9_:.-]+";
-const INLINE_RE_SRC = `\\^\\[<!-- zotero:(${KEY_PAT}):([^ ]*) --> ([\\s\\S]*?)\\]`;
+
 const ENDNOTE_DEF_RE_SRC = `^\\[\\^(\\d+)\\]: <!-- zotero:(${KEY_PAT}):([^ ]*) --> (.+)$`;
 const IN_TEXT_LEGACY_RE_SRC = `<!-- zotero-inline:(${KEY_PAT}):([^ ]*) -->\\s*([\\s\\S]*?)\\s*<!-- \\/zotero-inline -->`;
 const BIBLIOGRAPHY_START = "<!-- zotero-bibliography-start -->";
@@ -168,6 +168,7 @@ export class CitationManager {
 
   static parseInTextCitations(content: string): InTextCitation[] {
     const results: InTextCitation[] = [];
+
     const startRe = new RegExp(`\\^\\[<!-- zotero-intext:(${KEY_PAT}):([^ ]*) --> `, "g");
     let m: RegExpExecArray | null;
     while ((m = startRe.exec(content)) !== null) {

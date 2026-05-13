@@ -3,6 +3,7 @@
  */
 import { App, Component, MarkdownRenderer, MarkdownView, Notice } from "obsidian";
 import { ViewPlugin, WidgetType, Decoration, EditorView, ViewUpdate } from "@codemirror/view";
+import type { Range } from "@codemirror/state";
 import { appT } from "../i18n";
 import { CitationManager } from "../CitationManager";
 import { ZoteroItem } from "../ZoteroAPI";
@@ -74,39 +75,35 @@ class FnWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const wrapper = document.createElement("span");
-    wrapper.className = this.preview.display === "intext" ? "zotero-intext-widget" : "zotero-fn-widget";
+    const wrapper = createSpanEl({ cls: this.preview.display === "intext" ? "zotero-intext-widget" : "zotero-fn-widget" });
 
     if (this.isHighlighted) {
       wrapper.classList.add("zotero-fn-highlighted", "cm-highlight");
     }
 
     const text = this.preview.text || appT(this.app, "footnote.fallback", { value: this.num });
-    const target = this.preview.display === "intext"
-      ? document.createElement("span")
-      : document.createElement("span");
+    const marker = createSpanEl();
 
     if (this.preview.display === "intext") {
-      target.className = "zotero-intext-marker";
-      target.textContent = this.preview.markdown || text;
-      target.setAttribute("tabindex", "0");
+      marker.className = "zotero-intext-marker";
+      marker.setAttribute("tabindex", "0");
+      marker.textContent = this.preview.markdown || text;
+      wrapper.appendChild(marker);
     } else {
-      const sup = document.createElement("sup");
-      sup.className = "zotero-fn-num footnote-ref";
+      const sup = wrapper.createEl("sup", { cls: "zotero-fn-num footnote-ref" });
       sup.setAttribute("data-footnote-id", `fnref-${this.domId}`);
 
-      target.className = "footnote-link zotero-footnote-marker";
-      target.setAttribute("data-footref", this.identifier);
-      target.setAttribute("tabindex", "0");
-      target.textContent = `[${this.domId}]`;
-      sup.appendChild(target);
-      wrapper.appendChild(sup);
+      marker.className = "footnote-link zotero-footnote-marker";
+      marker.setAttribute("data-footref", this.identifier);
+      marker.setAttribute("tabindex", "0");
+      marker.textContent = `[${this.domId}]`;
+      sup.appendChild(marker);
     }
 
-    target.addEventListener("mousedown", (event) => event.preventDefault());
-    target.addEventListener("click", (event) => event.preventDefault());
+    marker.addEventListener("mousedown", (event) => event.preventDefault());
+    marker.addEventListener("click", (event) => event.preventDefault());
 
-    attachRenderedPopover(target, {
+    attachRenderedPopover(marker, {
       app: this.app,
       getSourcePath: this.getSourcePath,
       markdown: this.preview.markdown,
@@ -114,9 +111,6 @@ class FnWidget extends WidgetType {
       edit: this.preview.edit || undefined,
     });
 
-    if (this.preview.display === "intext") {
-      wrapper.appendChild(target);
-    }
     return wrapper;
   }
 
@@ -137,7 +131,7 @@ class FnWidget extends WidgetType {
 export function createFootnoteExtension(options: FootnoteExtensionOptions) {
   return ViewPlugin.fromClass(
     class {
-      decorations: any;
+      decorations: ReturnType<typeof buildDeco>;
       constructor(view: EditorView) {
         this.decorations = buildDeco(view, options);
       }
@@ -147,7 +141,7 @@ export function createFootnoteExtension(options: FootnoteExtensionOptions) {
         }
       }
     },
-    { decorations: (v: any) => v.decorations },
+    { decorations: (v) => v.decorations },
   );
 }
 
@@ -243,7 +237,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
   }
 
   hits.sort((a, b) => a.start - b.start);
-  const ranges: any[] = [];
+  const ranges: Range<Decoration>[] = [];
   let lastEnd = -1;
 
   for (const { start, end, num, markdown, text, identifier, domId, display, edit } of hits) {
@@ -382,6 +376,7 @@ function parseZoteroMetadata(text: string): { kind: "inline" | "intext" | "none"
       markdown: text.slice(inlineMatch[0].length),
     };
   }
+
   const inTextMatch = text.match(/^<!--\s*zotero-intext:([^:>]+):([^ ]*)\s*-->\s*/);
   if (inTextMatch) {
     return {
@@ -391,6 +386,7 @@ function parseZoteroMetadata(text: string): { kind: "inline" | "intext" | "none"
       markdown: text.slice(inTextMatch[0].length),
     };
   }
+
   return { kind: "none", key: "", locator: "", markdown: text };
 }
 
@@ -425,6 +421,28 @@ type AppWithPlugins = App & {
   };
 };
 
+function getActiveWindow(): Window {
+  const maybeWin = window as Window & { activeWindow?: Window };
+  return maybeWin.activeWindow ?? window;
+}
+
+function getActiveDocument(): Document {
+  const maybeWin = window as Window & { activeDocument?: Document };
+  return maybeWin.activeDocument ?? getActiveWindow().document;
+}
+
+function createDivEl(options?: { cls?: string }): HTMLDivElement {
+  const el = getActiveDocument().createElement("div");
+  if (options?.cls) el.className = options.cls;
+  return el;
+}
+
+function createSpanEl(options?: { cls?: string }): HTMLSpanElement {
+  const el = getActiveDocument().createElement("span");
+  if (options?.cls) el.className = options.cls;
+  return el;
+}
+
 function attachRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   const show = () => showRenderedPopover(target, spec);
   const scheduleHide = () => schedulePopoverHide(target);
@@ -447,8 +465,7 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   }
   destroyActivePopover();
 
-  const popover = document.createElement("div");
-  popover.className = "popover hover-popover zotero-footnote-popover";
+  const popover = createDivEl({ cls: "popover hover-popover zotero-footnote-popover" });
 
   const embed = popover.createDiv({ cls: "markdown-embed", attr: { "data-type": "footnote" } });
   const embedContent = embed.createDiv({ cls: "markdown-embed-content" });
@@ -460,19 +477,19 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
   }
   if (!spec.markdown.trim()) embed.addClass("mod-empty");
 
-  document.body.appendChild(popover);
+  getActiveDocument().body.appendChild(popover);
   const component = new Component();
   const reposition = () => positionPopover(target, popover);
   const onPopoverEnter = () => cancelPopoverHide();
   const onPopoverLeave = () => schedulePopoverHide(target);
   popover.addEventListener("mouseenter", onPopoverEnter);
   popover.addEventListener("mouseleave", onPopoverLeave);
-  window.addEventListener("scroll", reposition, true);
-  window.addEventListener("resize", reposition);
+  getActiveWindow().addEventListener("scroll", reposition, true);
+  getActiveWindow().addEventListener("resize", reposition);
 
   activePopover = { target, popover, component, hideTimer: null, reposition, onPopoverEnter, onPopoverLeave };
   reposition();
-  requestAnimationFrame(reposition);
+  getActiveWindow().requestAnimationFrame(reposition);
 
   if (spec.markdown.trim()) {
     void renderPopoverMarkdown(preview, spec, component, target, reposition);
@@ -485,8 +502,8 @@ async function renderPopoverMarkdown(preview: HTMLElement, spec: PopoverSpec, co
     await MarkdownRenderer.render(spec.app, spec.markdown, preview, spec.getSourcePath(), component);
     if (activePopover?.target !== target) return;
     reposition();
-    requestAnimationFrame(reposition);
-  } catch (e) {
+    getActiveWindow().requestAnimationFrame(reposition);
+  } catch {
     if (!preview.textContent?.trim()) preview.setText(spec.fallbackText);
   }
 }
@@ -549,9 +566,9 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
   const popoverRect = popover.getBoundingClientRect();
   let top = rect.top - popoverRect.height - gap;
   if (top < margin) top = rect.bottom + gap;
-  top = Math.max(margin, Math.min(window.innerHeight - popoverRect.height - margin, top));
+  top = Math.max(margin, Math.min(getActiveWindow().innerHeight - popoverRect.height - margin, top));
   const left = Math.min(
-    window.innerWidth - popoverRect.width - margin,
+    getActiveWindow().innerWidth - popoverRect.width - margin,
     Math.max(margin, rect.left + rect.width / 2 - popoverRect.width / 2),
   );
   popover.style.top = `${top}px`;
@@ -561,25 +578,25 @@ function positionPopover(target: HTMLElement, popover: HTMLElement): void {
 function schedulePopoverHide(target: HTMLElement): void {
   if (!activePopover || activePopover.target !== target) return;
   cancelPopoverHide();
-  activePopover.hideTimer = window.setTimeout(() => {
+  activePopover.hideTimer = getActiveWindow().setTimeout(() => {
     if (activePopover?.target === target) destroyActivePopover();
   }, 80);
 }
 
 function cancelPopoverHide(): void {
   if (!activePopover?.hideTimer) return;
-  window.clearTimeout(activePopover.hideTimer);
+  getActiveWindow().clearTimeout(activePopover.hideTimer);
   activePopover.hideTimer = null;
 }
 
 function destroyActivePopover(): void {
   if (!activePopover) return;
   const { popover, component, reposition, onPopoverEnter, onPopoverLeave, hideTimer } = activePopover;
-  if (hideTimer) window.clearTimeout(hideTimer);
+  if (hideTimer) getActiveWindow().clearTimeout(hideTimer);
   popover.removeEventListener("mouseenter", onPopoverEnter);
   popover.removeEventListener("mouseleave", onPopoverLeave);
-  window.removeEventListener("scroll", reposition, true);
-  window.removeEventListener("resize", reposition);
+  getActiveWindow().removeEventListener("scroll", reposition, true);
+  getActiveWindow().removeEventListener("resize", reposition);
   component.unload();
   popover.remove();
   activePopover = null;

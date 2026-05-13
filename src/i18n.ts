@@ -1,6 +1,12 @@
+import type { App } from "obsidian";
+
 /**
  * i18n.ts – Internationalization support for Zotero Citations plugin
  */
+
+export type I18nValue = string | number | boolean | null | undefined;
+
+export type LanguageSettings = { language?: string } | null | undefined;
 
 export interface I18NDict {
   [key: string]: string;
@@ -19,7 +25,7 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.refreshStyles": "刷新样式列表",
     "settings.refreshStylesDesc": "从 Zotero 重新读取可用 CSL 样式",
     "settings.citationMode": "引用格式模式",
-    "settings.citationModeDesc": "脚注模式：^[引用文本]；尾注模式：[^1] + 文末定义；文内模式：直接插入纯文本引用（如：\uFF08作者, 年份\uFF09）",
+    "settings.citationModeDesc": "脚注模式：^[引用文本]；尾注模式：[^1] + 文末定义；文内模式：正文作者-年份",
     "settings.editorDisplaySection": "编辑器显示",
     "settings.wordDisplay": "Word 风格脚注显示",
     "settings.wordDisplayDesc": "开启后，编辑器和预览中的脚注标记显示为上标数字；悬停数字可查看完整脚注/尾注内容",
@@ -36,12 +42,14 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.exportSection": "Pandoc 导出",
     "settings.pandocPath": "Pandoc 可执行文件路径",
     "settings.pandocPathDesc": "默认 pandoc（需在 PATH 中），否则填完整路径",
+    "settings.pandocPathPlaceholder": "例如：pandoc",
     "settings.pandocFlags": "额外 Pandoc 参数",
     "settings.pandocFlagsDesc": "附加到导出命令，例如 --reference-doc=template.docx",
     "settings.useDefaultExportDir": "使用固定导出目录",
     "settings.useDefaultExportDirDesc": "关闭时每次导出弹出路径选择框",
     "settings.defaultExportDir": "默认导出目录",
     "settings.defaultExportDirDesc": "留空则与源文件同目录",
+    "settings.defaultExportDirPlaceholder": "例如：/Users/you/Documents",
     "settings.commandsSection": "命令列表（在快捷键设置中绑定）",
     "settings.switchModeNotice": "已切换为{mode}模式，更新 {count} 个引用",
     "status.connected": "Zotero 已连接 ✓",
@@ -56,7 +64,7 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "mode.intext.label": "文内模式",
     "mode.inline.option": "脚注模式（^[引用文本]）",
     "mode.endnote.option": "尾注模式（正文只显示编号）",
-    "mode.intext.option": "文内模式（纯文本作者-年份）",
+    "mode.intext.option": "文内模式（正文作者-年份）",
     "export.dialogTitle": "导出为 Word",
     "export.filterName": "Word 文档",
     "export.pandocFailed": "Pandoc 失败：\n{error}",
@@ -170,7 +178,7 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.refreshStyles": "Refresh style list",
     "settings.refreshStylesDesc": "Reload available CSL styles from Zotero",
     "settings.citationMode": "Citation mode",
-    "settings.citationModeDesc": "Footnote mode: ^[citation text]; endnote mode: [^1] plus note definitions at the end of the document; in-text mode: inserts plain-text citations (for example, (Author, Year))",
+    "settings.citationModeDesc": "Footnote mode: ^[citation text]; endnote mode: [^1] plus note definitions at the end of the document; in-text mode: author-year in running text",
     "settings.editorDisplaySection": "Editor display",
     "settings.wordDisplay": "Word-style footnote display",
     "settings.wordDisplayDesc": "When enabled, footnote markers in the editor and preview are shown as superscript numbers; hover a number to view the full footnote or endnote.",
@@ -187,12 +195,14 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.exportSection": "Pandoc export",
     "settings.pandocPath": "Pandoc executable path",
     "settings.pandocPathDesc": "Default: pandoc in PATH. Otherwise enter the full executable path.",
+    "settings.pandocPathPlaceholder": "For example: pandoc",
     "settings.pandocFlags": "Extra Pandoc flags",
     "settings.pandocFlagsDesc": "Appended to the export command, e.g. --reference-doc=template.docx",
     "settings.useDefaultExportDir": "Use a fixed export directory",
     "settings.useDefaultExportDirDesc": "When off, a path picker is shown every time you export.",
     "settings.defaultExportDir": "Default export directory",
     "settings.defaultExportDirDesc": "Leave empty to use the source file's directory",
+    "settings.defaultExportDirPlaceholder": "For example: /Users/you/Documents",
     "settings.commandsSection": "Command list (bind these in Hotkeys)",
     "settings.switchModeNotice": "Switched to {mode} mode and updated {count} citations",
     "status.connected": "Zotero connected ✓",
@@ -207,7 +217,7 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "mode.intext.label": "In-text mode",
     "mode.inline.option": "Footnote mode (^[citation text])",
     "mode.endnote.option": "Endnote mode (number only in the main text)",
-    "mode.intext.option": "In-text mode (plain-text author-year)",
+    "mode.intext.option": "In-text mode (author-year in paragraph)",
     "export.dialogTitle": "Export to Word",
     "export.filterName": "Word document",
     "export.pandocFailed": "Pandoc failed:\n{error}",
@@ -313,25 +323,31 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
 
 export type Language = "zh" | "en";
 
-export function getLanguage(settings: any): Language {
+export function getLanguage(settings: LanguageSettings): Language {
   return settings?.language === "en" ? "en" : "zh";
 }
 
-export function formatI18n(template: string, vars: Record<string, any> = {}): string {
-  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] != null ? String(vars[key]) : "");
+export function formatI18n(template: string, vars: Record<string, I18nValue> = {}): string {
+  return template.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] != null ? String(vars[key]) : "");
 }
 
-export function t(settingsOrLang: any, key: string, vars?: Record<string, any>): string {
-  const lang: Language = typeof settingsOrLang === "string" ? settingsOrLang as Language : getLanguage(settingsOrLang);
+export function t(settingsOrLang: Language | LanguageSettings, key: string, vars?: Record<string, I18nValue>): string {
+  const lang: Language = typeof settingsOrLang === "string" ? settingsOrLang : getLanguage(settingsOrLang);
   const dict = I18N[lang] || I18N.zh;
   const fallback = I18N.zh[key] || key;
   return formatI18n(dict[key] || fallback, vars);
 }
 
-export function getAppSettings(app: any): any {
-  return app?.plugins?.plugins?.["zotero-citations"]?.settings;
+type AppWithPluginSettings = App & {
+  plugins?: {
+    plugins?: Record<string, { settings?: LanguageSettings } | undefined>;
+  };
+};
+
+export function getAppSettings(app: App): LanguageSettings {
+  return (app as AppWithPluginSettings).plugins?.plugins?.["zotero-citations"]?.settings;
 }
 
-export function appT(app: any, key: string, vars?: Record<string, any>): string {
-  return t(getAppSettings(app) || {}, key, vars);
+export function appT(app: App, key: string, vars?: Record<string, I18nValue>): string {
+  return t(getAppSettings(app), key, vars);
 }

@@ -3,10 +3,10 @@
  * Reconstructed from the existing bundled plugin so the source tree is buildable again.
  */
 import * as obsidian from "obsidian";
-import { CitationManager, EndnoteDef, InTextCitation, InlineCitation } from "./CitationManager";
+import { CitationManager, EndnoteDef, InTextCitation, InlineCitation, MinimalEditor } from "./CitationManager";
 import { ExportManager } from "./ExportManager";
 import { createFootnoteExtension } from "./extensions/FootnoteExtension";
-import { appT, t } from "./i18n";
+import { appT, I18nValue, t } from "./i18n";
 import { ExportModal } from "./modals/ExportModal";
 import { PreferencesModal } from "./modals/PreferencesModal";
 import { SearchModal } from "./modals/SearchModal";
@@ -20,11 +20,11 @@ import {
   ZoteroPickerError,
 } from "./ZoteroAPI";
 
-type EditorLike = any;
+type EditorLike = MinimalEditor & obsidian.Editor & { cm?: { focus?: () => void } };
 
 type SelectionSnapshot = {
-  from: any;
-  to: any;
+  from: obsidian.EditorPosition;
+  to: obsidian.EditorPosition;
 };
 
 type AppWithCommands = obsidian.App & {
@@ -90,14 +90,18 @@ export default class ZoteroCitations extends obsidian.Plugin {
   itemCache: Map<string, ZoteroItem> = new Map();
 
   // Reference to the registered editor extension so we can refresh it
-  editorExtension: any = null;
+  editorExtension: ReturnType<typeof createFootnoteExtension> | null = null;
   ribbonIconEl: HTMLElement | null = null;
-  titlebarActions: WeakMap<any, HTMLElement[]> = new WeakMap();
+  titlebarActions: WeakMap<obsidian.MarkdownView, HTMLElement[]> = new WeakMap();
   focusBurstTimer: number | null = null;
   focusBurstStopTimer: number | null = null;
   focusBurstTopmostResetTimer: number | null = null;
 
-  async onload() {
+  onload(): void {
+    void this.initialize();
+  }
+
+  private async initialize(): Promise<void> {
     await this.loadSettings();
     this.api = new ZoteroAPI(this.settings.zoteroPort);
 
@@ -109,7 +113,9 @@ export default class ZoteroCitations extends obsidian.Plugin {
     obsidian.addIcon("zotero-refresh", ZOTERO_REFRESH_ICON);
     obsidian.addIcon("zotero-unlink", ZOTERO_UNLINK_ICON);
 
-    this.ribbonIconEl = this.addRibbonIcon("zotero-z", this.t("ribbon.preferences"), () => this.openPreferences());
+    this.ribbonIconEl = this.addRibbonIcon("zotero-z", this.t("ribbon.preferences"), () => {
+      this.openPreferences();
+    });
 
     this.editorExtension = createFootnoteExtension({
       isEnabled: () => this.settings.showWordStyleFootnotes,
@@ -123,47 +129,47 @@ export default class ZoteroCitations extends obsidian.Plugin {
     this.addCommand({
       id: "insert-edit-citation",
       name: commandLabels["insert-edit-citation"],
-      editorCallback: (editor) => this.insertOrEditCitation(editor),
+      editorCallback: (editor) => { void this.insertOrEditCitation(editor as EditorLike); },
     });
     this.addCommand({
       id: "toggle-word-display",
       name: commandLabels["toggle-word-display"],
-      callback: () => this.toggleWordDisplay(),
+      callback: () => { this.toggleWordDisplay(); },
     });
     this.addCommand({
       id: "toggle-toolbar",
       name: commandLabels["toggle-toolbar"],
-      callback: () => this.toggleToolbar(),
+      callback: () => { this.toggleToolbar(); },
     });
     this.addCommand({
       id: "insert-bibliography",
       name: commandLabels["insert-bibliography"],
-      editorCallback: async (editor) => this.insertBibliography(editor),
+      editorCallback: (editor) => { void this.insertBibliography(editor as EditorLike); },
     });
     this.addCommand({
       id: "refresh-citations",
       name: commandLabels["refresh-citations"],
-      editorCallback: async (editor) => this.refreshAll(editor),
+      editorCallback: (editor) => { void this.refreshAll(editor as EditorLike); },
     });
     this.addCommand({
       id: "export-to-word",
       name: commandLabels["export-to-word"],
-      callback: () => this.exportToWord(),
+      callback: () => { void this.exportToWord(); },
     });
     this.addCommand({
       id: "unlink-citations",
       name: commandLabels["unlink-citations"],
-      editorCallback: (editor) => this.unlinkCitations(editor),
+      editorCallback: (editor) => { this.unlinkCitations(editor as EditorLike); },
     });
     this.addCommand({
       id: "document-preferences",
       name: commandLabels["document-preferences"],
-      callback: () => this.openPreferences(),
+      callback: () => { this.openPreferences(); },
     });
     this.addCommand({
       id: "check-pandoc",
       name: commandLabels["check-pandoc"],
-      callback: () => ExportManager.verifyAndNotify(this.settings),
+      callback: () => { void ExportManager.verifyAndNotify(this.settings); },
     });
 
     this.addSettingTab(new ZoteroSettingTab(this.app, this));
@@ -171,7 +177,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
 
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshToolbars()));
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshToolbars()));
-    this.app.workspace.onLayoutReady(() => this.refreshToolbars());
+    this.app.workspace.onLayoutReady(() => { this.refreshToolbars(); });
   }
 
   onunload() {
@@ -212,7 +218,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
     });
   }
 
-  t(key: string, vars?: Record<string, any>) {
+  t(key: string, vars?: Record<string, I18nValue>) {
     return t(this.settings, key, vars);
   }
 
@@ -288,7 +294,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
         this.cacheItem(item);
       }
       return item;
-    } catch (_e) {
+    } catch {
       return null;
     }
   }
@@ -326,10 +332,10 @@ export default class ZoteroCitations extends obsidian.Plugin {
     if (!snapshot) return;
     try {
       editor.setSelection(snapshot.from, snapshot.to);
-    } catch (_e) {
+    } catch {
       try {
         editor.setCursor(snapshot.to);
-      } catch (_e2) {
+      } catch {
         // noop
       }
     }
@@ -339,92 +345,25 @@ export default class ZoteroCitations extends obsidian.Plugin {
     const focusEditor = () => {
       try {
         editor?.focus?.();
-      } catch (_e) {
+      } catch {
         // noop
       }
       try {
         editor?.cm?.focus?.();
-      } catch (_e) {
+      } catch {
         // noop
       }
     };
 
     const attempt = () => {
       try {
-        const remote = require("@electron/remote");
-        const win = remote?.getCurrentWindow?.();
-        const appName = remote?.app?.getName?.();
-
-        try {
-          if (win?.isMinimized?.()) win.restore?.();
-        } catch (_e) {
-          // noop
-        }
-        try {
-          win?.show?.();
-        } catch (_e) {
-          // noop
-        }
-        try {
-          win?.focus?.();
-        } catch (_e) {
-          // noop
-        }
-        try {
-          win?.moveTop?.();
-        } catch (_e) {
-          // noop
-        }
-        try {
-          remote?.app?.focus?.({ steal: true });
-        } catch (_e) {
-          try {
-            remote?.app?.focus?.();
-          } catch (_e2) {
-            // noop
-          }
-        }
-        try {
-          if (obsidian.Platform.isMacOS) {
-            const { execFile } = require("child_process");
-            execFile(
-              "osascript",
-              ["-e", `tell application "${String(appName || "Obsidian").replace(/"/g, '\\"')}" to activate`],
-              () => {
-                // noop
-              },
-            );
-          }
-        } catch (_e) {
-          // noop
-        }
-      } catch (_e) {
-        try {
-          const electron = require("electron");
-          const win = electron.remote?.getCurrentWindow?.();
-          try {
-            if (win?.isMinimized?.()) win.restore?.();
-          } catch (_e2) {
-            // noop
-          }
-          try {
-            win?.focus?.();
-          } catch (_e2) {
-            // noop
-          }
-        } catch (_e2) {
-          // noop
-        }
-      }
-
-      try {
         window.focus();
-      } catch (_e) {
+      } catch {
         // noop
       }
       try {
         (this.app as AppWithCommands).commands?.executeCommandById?.("editor:focus");
-      } catch (_e) {
+      } catch {
         // noop
       }
       focusEditor();
@@ -443,19 +382,6 @@ export default class ZoteroCitations extends obsidian.Plugin {
       this.focusBurstTopmostResetTimer = null;
     }
 
-    let win: any = null;
-    try {
-      const remote = require("@electron/remote");
-      win = remote?.getCurrentWindow?.();
-      try {
-        win?.setAlwaysOnTop?.(true);
-      } catch (_e) {
-        // noop
-      }
-    } catch (_e) {
-      // noop
-    }
-
     attempt();
     this.focusBurstTimer = window.setInterval(attempt, 40);
     this.focusBurstStopTimer = window.setTimeout(() => {
@@ -466,17 +392,12 @@ export default class ZoteroCitations extends obsidian.Plugin {
       this.focusBurstStopTimer = null;
     }, 1200);
     this.focusBurstTopmostResetTimer = window.setTimeout(() => {
-      try {
-        win?.setAlwaysOnTop?.(false);
-      } catch (_e) {
-        // noop
-      }
       this.focusBurstTopmostResetTimer = null;
     }, 1400);
   }
 
   // ── Insert / Edit citation (uses Zotero native CAYW picker) ──────────────
-  async insertOrEditCitation(editor: EditorLike) {
+  async insertOrEditCitation(editor: EditorLike): Promise<void> {
     const content = editor.getValue();
     const pos = editor.posToOffset(editor.getCursor());
     const existingInline = CitationManager.isInsideInline(content, pos);
@@ -526,7 +447,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   // ── Toggle Word-style display ─────────────────────────────────────────────
-  toggleWordDisplay() {
+  toggleWordDisplay(): void {
     this.settings.showWordStyleFootnotes = !this.settings.showWordStyleFootnotes;
     void this.saveSettings();
     this.refreshEditorExtension();
@@ -536,7 +457,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   // ── Insert bibliography ───────────────────────────────────────────────────
-  async insertBibliography(editor: EditorLike) {
+  async insertBibliography(editor: EditorLike): Promise<void> {
     const content = editor.getValue();
     const all = CitationManager.parseAllCitations(content);
     if (!all.length) {
@@ -564,7 +485,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   // ── Refresh all ───────────────────────────────────────────────────────────
-  async refreshAll(editor: EditorLike) {
+  async refreshAll(editor: EditorLike): Promise<void> {
     const removedOrphans = CitationManager.removeUnreferencedEndnotes(editor);
     const content = editor.getValue();
     const all = CitationManager.parseAllCitations(content);
@@ -628,7 +549,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   // ── Export to Word ────────────────────────────────────────────────────────
-  async exportToWord() {
+  async exportToWord(): Promise<void> {
     const inputPath = this.getInputFilePath();
     if (!inputPath) {
       new obsidian.Notice(this.t("notice.openFileBeforeExport"));
@@ -639,19 +560,19 @@ export default class ZoteroCitations extends obsidian.Plugin {
     if (this.settings.useDefaultExportDir) {
       await this.doExport(inputPath, suggested);
     } else {
-      const chosen = await ExportManager.showNativeSaveDialog(suggested, this.settings);
+      const chosen = ExportManager.showNativeSaveDialog(suggested, this.settings);
       if (chosen === null) return;
       if (chosen) {
         await this.doExport(inputPath, chosen);
       } else {
-        new ExportModal(this.app, suggested, async (outputPath) => {
-          await this.doExport(inputPath, outputPath);
+        new ExportModal(this.app, suggested, (outputPath) => {
+          void this.doExport(inputPath, outputPath);
         }).open();
       }
     }
   }
 
-  async doExport(inputPath: string, outputPath: string) {
+  async doExport(inputPath: string, outputPath: string): Promise<void> {
     const notice = new obsidian.Notice(this.t("notice.exporting"), 0);
     try {
       await ExportManager.exportToWord(inputPath, outputPath, this.settings);
@@ -664,7 +585,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   // ── Unlink citations ──────────────────────────────────────────────────────
-  unlinkCitations(editor: EditorLike) {
+  unlinkCitations(editor: EditorLike): void {
     const inlines = CitationManager.parseInlineCitations(editor.getValue()).length;
     const endnotes = CitationManager.parseEndnoteDefs(editor.getValue()).length;
     const inText = CitationManager.parseInTextCitations(editor.getValue()).length;
@@ -688,7 +609,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   // ── Document preferences ──────────────────────────────────────────────────
-  openPreferences() {
+  openPreferences(): void {
     new PreferencesModal(this.app, {
       api: this.api,
       currentStyle: this.settings.cslStyle,
@@ -859,33 +780,33 @@ export default class ZoteroCitations extends obsidian.Plugin {
         evt.preventDefault();
         evt.stopPropagation();
         cb();
-      }) as HTMLElement;
+      });
       el.classList.add("zotero-titlebar-action");
       if (active) el.classList.add("is-active");
       actionEls.push(el);
     };
 
-    if (btns.export !== false) action("zotero-export", this.t("toolbar.export"), () => this.exportToWord());
+    if (btns.export !== false) action("zotero-export", this.t("toolbar.export"), () => { void this.exportToWord(); });
     if (btns.unlink !== false) action("zotero-unlink", this.t("toolbar.unlink"), () => {
       const ed = view.editor;
-      if (ed) this.unlinkCitations(ed);
+      if (ed) this.unlinkCitations(ed as EditorLike);
     });
-    if (btns.changeStyle !== false) action("zotero-style", this.t("toolbar.changeStyle"), () => this.openPreferences());
+    if (btns.changeStyle !== false) action("zotero-style", this.t("toolbar.changeStyle"), () => { this.openPreferences(); });
     if (btns.refresh !== false) action("zotero-refresh", this.t("toolbar.refresh"), () => {
       const ed = view.editor;
-      if (ed) this.refreshAll(ed);
+      if (ed) void this.refreshAll(ed as EditorLike);
     });
     if (btns.wordDisplay !== false) {
       action(
         "zotero-word-display",
         this.t("toolbar.wordDisplay"),
-        () => this.toggleWordDisplay(),
+        () => { this.toggleWordDisplay(); },
         this.settings.showWordStyleFootnotes,
       );
     }
     if (btns.insertCitation !== false) action("zotero-cite", this.t("toolbar.insertCitation"), () => {
       const ed = view.editor;
-      if (ed) this.insertOrEditCitation(ed);
+      if (ed) void this.insertOrEditCitation(ed as EditorLike);
     });
 
     this.titlebarActions.set(view, actionEls);
@@ -941,9 +862,9 @@ export default class ZoteroCitations extends obsidian.Plugin {
   findById(root: ParentNode, id: string): HTMLElement | null {
     if (!id) return null;
     if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-      return root.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null;
+      return root.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
     }
-    return root.querySelector(`[id="${id.replace(/"/g, '\\"')}"]`) as HTMLElement | null;
+    return root.querySelector<HTMLElement>(`[id="${id.replace(/"/g, "\\\"")}"]`);
   }
 
   normalizeFootnoteText(text: string) {

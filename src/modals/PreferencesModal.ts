@@ -2,8 +2,8 @@
  * PreferencesModal.ts – Document preferences modal
  * Improvement 2: Searchable style selector with dynamic Zotero styles
  */
-import { Modal, App, Notice } from "obsidian";
-import { appT, getAppSettings, t } from "../i18n";
+import { Modal, App, Editor, Notice } from "obsidian";
+import { appT, getAppSettings } from "../i18n";
 import { ZoteroAPI, ZoteroItem, ZoteroConnectionError, InstalledStyle } from "../ZoteroAPI";
 import { CitationManager } from "../CitationManager";
 import { CSL_STYLES, DEFAULT_SETTINGS, getStyleName, getModeLabel } from "../settings";
@@ -15,7 +15,7 @@ export interface PreferencesModalOpts {
   onStyleChange: (style: string) => Promise<void>;
   onModeChange: (mode: string) => Promise<void>;
   refreshEditorExtension?: () => void;
-  getEditor: () => any;
+  getEditor: () => Editor | null;
   getItemFromCache: (key: string) => ZoteroItem | undefined;
   fetchAndCacheItem: (key: string) => Promise<ZoteroItem | null>;
 }
@@ -36,7 +36,11 @@ export class PreferencesModal extends Modal {
     this.selectedMode = opts.currentMode;
   }
 
-  async onOpen(): Promise<void> {
+  onOpen(): void {
+    void this.renderContent();
+  }
+
+  private renderContent(): void {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("zotero-prefs-modal");
@@ -53,7 +57,7 @@ export class PreferencesModal extends Modal {
       text: appT(this.app, "prefs.refreshStyles"),
       cls: "clickable-icon zotero-prefs-refresh",
     });
-    refreshBtn.addEventListener("click", () => this.loadStyles(true));
+    refreshBtn.addEventListener("click", () => { void this.loadStyles(true); });
 
     // Search input for styles
     this.styleSearchInput = styleWrap.createEl("input", {
@@ -67,7 +71,7 @@ export class PreferencesModal extends Modal {
     this.styleListEl = styleWrap.createDiv({ cls: "zotero-style-list" });
 
     // Load styles (dynamic from Zotero + fallback)
-    await this.loadStyles(false);
+    this.loadStyles(false);
 
     // ── Mode selector ──
     const modeWrap = contentEl.createDiv({ cls: "zotero-prefs-section" });
@@ -93,10 +97,10 @@ export class PreferencesModal extends Modal {
     const cancelBtn = btnRow.createEl("button", { text: appT(this.app, "common.cancel") });
     cancelBtn.addEventListener("click", () => this.close());
     const applyBtn = btnRow.createEl("button", { text: appT(this.app, "prefs.apply"), cls: "mod-cta" });
-    applyBtn.addEventListener("click", () => this.applyToDocument(applyBtn));
+    applyBtn.addEventListener("click", () => { void this.applyToDocument(applyBtn); });
   }
 
-  private async loadStyles(showNotice: boolean): Promise<void> {
+  private loadStyles(showNotice: boolean): void {
     // First, populate from hardcoded fallback
     const settings = getAppSettings(this.app) || DEFAULT_SETTINGS;
     const fallbackStyles = CSL_STYLES.map((s) => ({
@@ -107,8 +111,8 @@ export class PreferencesModal extends Modal {
     // Try reading dynamic styles from Zotero
     let dynamicStyles: InstalledStyle[] = [];
     try {
-      dynamicStyles = await this.opts.api.getInstalledStyles();
-    } catch (e) {
+      dynamicStyles = this.opts.api.getInstalledStyles();
+    } catch {
       // ignore
     }
 
@@ -187,7 +191,7 @@ export class PreferencesModal extends Modal {
     btn.disabled = true;
     btn.setText(appT(this.app, "prefs.fetching"));
     try {
-      const uniqueKeys = [...new Set(citations.map((c: any) => c.key))];
+      const uniqueKeys = [...new Set(citations.map((c) => c.key))];
       const itemMap = new Map<string, ZoteroItem>();
       for (const key of uniqueKeys) {
         const cached = this.opts.getItemFromCache(key);
