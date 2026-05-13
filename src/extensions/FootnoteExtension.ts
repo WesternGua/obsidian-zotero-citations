@@ -3,6 +3,7 @@
  */
 import { App, Component, MarkdownRenderer, MarkdownView, Notice } from "obsidian";
 import { ViewPlugin, WidgetType, Decoration, EditorView, ViewUpdate } from "@codemirror/view";
+import type { Range } from "@codemirror/state";
 import { appT } from "../i18n";
 import { CitationManager } from "../CitationManager";
 import { ZoteroItem } from "../ZoteroAPI";
@@ -188,7 +189,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
   }
 
   hits.sort((a, b) => a.start - b.start);
-  const ranges: any[] = [];
+  const ranges: Range<Decoration>[] = [];
   let lastEnd = -1;
 
   for (const { start, end, num, markdown, text, identifier, domId, edit } of hits) {
@@ -426,7 +427,7 @@ async function renderPopoverMarkdown(preview: HTMLElement, spec: PopoverSpec, co
     if (activePopover?.target !== target) return;
     reposition();
     requestAnimationFrame(reposition);
-  } catch (e) {
+  } catch {
     if (!preview.textContent?.trim()) preview.setText(spec.fallbackText);
   }
 }

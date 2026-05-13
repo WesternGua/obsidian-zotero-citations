@@ -1,8 +1,12 @@
+import type { App } from "obsidian";
+
 /**
  * i18n.ts – Internationalization support for Zotero Citations plugin
  */
 
 export type I18nValue = string | number | boolean | null | undefined;
+
+export type LanguageSettings = { language?: string } | null | undefined;
 
 export interface I18NDict {
   [key: string]: string;
@@ -38,12 +42,14 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.exportSection": "Pandoc 导出",
     "settings.pandocPath": "Pandoc 可执行文件路径",
     "settings.pandocPathDesc": "默认 pandoc（需在 PATH 中），否则填完整路径",
+    "settings.pandocPathPlaceholder": "例如：pandoc",
     "settings.pandocFlags": "额外 Pandoc 参数",
     "settings.pandocFlagsDesc": "附加到导出命令，例如 --reference-doc=template.docx",
     "settings.useDefaultExportDir": "使用固定导出目录",
     "settings.useDefaultExportDirDesc": "关闭时每次导出弹出路径选择框",
     "settings.defaultExportDir": "默认导出目录",
     "settings.defaultExportDirDesc": "留空则与源文件同目录",
+    "settings.defaultExportDirPlaceholder": "例如：/Users/you/Documents",
     "settings.commandsSection": "命令列表（在快捷键设置中绑定）",
     "settings.switchModeNotice": "已切换为{mode}模式，更新 {count} 个引用",
     "status.connected": "Zotero 已连接 ✓",
@@ -186,12 +192,14 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
     "settings.exportSection": "Pandoc export",
     "settings.pandocPath": "Pandoc executable path",
     "settings.pandocPathDesc": "Default: pandoc in PATH. Otherwise enter the full executable path.",
+    "settings.pandocPathPlaceholder": "For example: pandoc",
     "settings.pandocFlags": "Extra Pandoc flags",
     "settings.pandocFlagsDesc": "Appended to the export command, e.g. --reference-doc=template.docx",
     "settings.useDefaultExportDir": "Use a fixed export directory",
     "settings.useDefaultExportDirDesc": "When off, a path picker is shown every time you export.",
     "settings.defaultExportDir": "Default export directory",
     "settings.defaultExportDirDesc": "Leave empty to use the source file's directory",
+    "settings.defaultExportDirPlaceholder": "For example: /Users/you/Documents",
     "settings.commandsSection": "Command list (bind these in Hotkeys)",
     "settings.switchModeNotice": "Switched to {mode} mode and updated {count} citations",
     "status.connected": "Zotero connected ✓",
@@ -309,25 +317,31 @@ export const I18N: { zh: I18NDict; en: I18NDict } = {
 
 export type Language = "zh" | "en";
 
-export function getLanguage(settings: any): Language {
+export function getLanguage(settings: LanguageSettings): Language {
   return settings?.language === "en" ? "en" : "zh";
 }
 
-export function formatI18n(template: string, vars: Record<string, any> = {}): string {
-  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] != null ? String(vars[key]) : "");
+export function formatI18n(template: string, vars: Record<string, I18nValue> = {}): string {
+  return template.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] != null ? String(vars[key]) : "");
 }
 
-export function t(settingsOrLang: any, key: string, vars?: Record<string, any>): string {
-  const lang: Language = typeof settingsOrLang === "string" ? settingsOrLang as Language : getLanguage(settingsOrLang);
+export function t(settingsOrLang: Language | LanguageSettings, key: string, vars?: Record<string, I18nValue>): string {
+  const lang: Language = typeof settingsOrLang === "string" ? settingsOrLang : getLanguage(settingsOrLang);
   const dict = I18N[lang] || I18N.zh;
   const fallback = I18N.zh[key] || key;
   return formatI18n(dict[key] || fallback, vars);
 }
 
-export function getAppSettings(app: any): any {
-  return app?.plugins?.plugins?.["zotero-citations"]?.settings;
+type AppWithPluginSettings = App & {
+  plugins?: {
+    plugins?: Record<string, { settings?: LanguageSettings } | undefined>;
+  };
+};
+
+export function getAppSettings(app: App): LanguageSettings {
+  return (app as AppWithPluginSettings).plugins?.plugins?.["zotero-citations"]?.settings;
 }
 
-export function appT(app: any, key: string, vars?: Record<string, any>): string {
-  return t(getAppSettings(app) || {}, key, vars);
+export function appT(app: App, key: string, vars?: Record<string, I18nValue>): string {
+  return t(getAppSettings(app), key, vars);
 }
