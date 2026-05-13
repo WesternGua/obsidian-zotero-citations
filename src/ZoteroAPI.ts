@@ -677,8 +677,9 @@ ORDER BY i.key, ic.orderIndex;`;
     } else {
       const issued = isRecord(record.issued) ? record.issued : undefined;
       const dateParts = issued?.["date-parts"];
-      const y = Array.isArray(dateParts) && Array.isArray(dateParts[0]) ? dateParts[0][0] : undefined;
-      if (y) date = String(y);
+      const firstDatePart = Array.isArray(dateParts) ? dateParts[0] : undefined;
+      const y = Array.isArray(firstDatePart) && firstDatePart.length > 0 ? firstDatePart[0] : undefined;
+      if (typeof y === "number" || typeof y === "string") date = String(y);
     }
 
     const publicationTitle = toStr(record.publicationTitle ?? record["container-title"] ?? record.journalAbbreviation) || undefined;
@@ -727,7 +728,7 @@ function asJsonRpcResponse(value: unknown): JsonRpcResponse {
 function parseJsonArray(input: unknown): unknown[] {
   if (typeof input !== "string") return [];
   try {
-    const parsed = JSON.parse(input);
+    const parsed: unknown = JSON.parse(input);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];

@@ -158,7 +158,7 @@ export class ZoteroSettingTab extends PluginSettingTab {
       title: getStyleName(s.id, this.plugin.settings),
     }));
     try {
-      const dynamic = await this.plugin.api.getInstalledStyles();
+      const dynamic = this.plugin.api.getInstalledStyles();
       if (dynamic.length) {
         const dynamicMap = new Map(dynamic.map((s) => [s.id, s.title]));
         for (const fallback of styleOptions) {

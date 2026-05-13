@@ -1,24 +1,29 @@
 /**
  * ReferenceDocGenerator.ts – Generates a .docx reference template for Pandoc export
  */
-import JSZip from "jszip";
+import { ZipFile } from "yazl";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { once } from "events";
 
 export class ReferenceDocGenerator {
   static async generate(): Promise<string> {
-    const zip = new JSZip();
-    zip.file("[Content_Types].xml", CONTENT_TYPES);
-    zip.folder("_rels")!.file(".rels", ROOT_RELS);
-    const word = zip.folder("word")!;
-    word.file("document.xml", DOCUMENT_XML);
-    word.file("styles.xml", STYLES_XML);
-    word.file("settings.xml", SETTINGS_XML);
-    word.folder("_rels")!.file("document.xml.rels", DOCUMENT_RELS);
-    const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+    const zip = new ZipFile();
+    zip.addBuffer(Buffer.from(CONTENT_TYPES, "utf8"), "[Content_Types].xml");
+    zip.addBuffer(Buffer.from(ROOT_RELS, "utf8"), "_rels/.rels");
+    zip.addBuffer(Buffer.from(DOCUMENT_XML, "utf8"), "word/document.xml");
+    zip.addBuffer(Buffer.from(STYLES_XML, "utf8"), "word/styles.xml");
+    zip.addBuffer(Buffer.from(SETTINGS_XML, "utf8"), "word/settings.xml");
+    zip.addBuffer(Buffer.from(DOCUMENT_RELS, "utf8"), "word/_rels/document.xml.rels");
+
     const out = path.join(os.tmpdir(), "zotero-reference-chinese-law.docx");
-    fs.writeFileSync(out, buf);
+    await fs.promises.mkdir(path.dirname(out), { recursive: true });
+    const output = fs.createWriteStream(out);
+    zip.outputStream.pipe(output);
+    zip.end();
+    await once(output, "close");
+
     return out;
   }
 }
