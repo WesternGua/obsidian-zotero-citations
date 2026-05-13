@@ -1,16 +1,15 @@
-# Zotero Citations v0.2.5
+# Zotero Citations v0.2.4
 
-## Community review fixes
+## Community review follow-ups
 
-- Removed remaining `any`-related unsafe TypeScript/ESLint warnings in core files.
-- Replaced `require()`-style imports with ESM imports.
-- Fixed async/promise usage warnings in settings/modals/main flows.
-- Updated settings headings/text style to match Community review requirements.
-
-## In-text mode alignment
-
-- Kept in-text citations plugin-managed in Obsidian.
-- Kept Word export behavior: in-text citations export as paragraph text (not footnotes).
+- Fixed remaining CSS review issues:
+  - removed duplicate selectors
+  - removed `!important`
+  - removed `:has()` selectors
+  - replaced in-text underline with `border-bottom` styling for compatibility
+- Kept in-text citation behavior unchanged:
+  - plugin-managed in Obsidian
+  - exported as paragraph text in Word (not footnotes)
 
 ---
 
