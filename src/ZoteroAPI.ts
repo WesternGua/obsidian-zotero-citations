@@ -55,6 +55,25 @@ export interface InstalledStyle {
 
 type JsonObject = Record<string, unknown>;
 
+interface JsonRpcResponse {
+  error?: JsonObject;
+  result?: unknown;
+}
+
+interface SQLiteFieldRow {
+  itemKey: string;
+  itemType?: string;
+  fieldName?: string;
+  value?: string;
+}
+
+interface SQLiteCreatorRow {
+  itemKey: string;
+  creatorType?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
 // ── Locator formatting ─────────────────────────────────────────────────────
 const LOCATOR_PREFIX: Record<string, string> = {
   page: "p.",
@@ -266,10 +285,10 @@ export class ZoteroAPI {
         throw: false,
       });
       if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
-      const d = r.json;
-      if (d.error) throw new Error(d.error.message);
+      const d = asJsonRpcResponse(r.json);
+      if (d.error) throw new Error(toStr(d.error.message) || "Zotero JSON-RPC error");
       const result = Array.isArray(d.result) ? d.result : [];
-      return result.map((item) => this.normalizeAny(item)).filter((item) => !!item.title);
+      return result.map((item) => this.normalizeAny(item)).filter((item) => item.title.length > 0);
     } catch (err) {
       throw new ZoteroConnectionError(String(err));
     }
@@ -287,8 +306,8 @@ export class ZoteroAPI {
         throw: false,
       });
       if (r.status !== 200) return map;
-      const d = r.json;
-      if (d.error || !d.result || typeof d.result !== "object") return map;
+      const d = asJsonRpcResponse(r.json);
+      if (d.error || !isRecord(d.result)) return map;
       for (const [itemKey, citeKey] of Object.entries(d.result)) {
         if (typeof citeKey === "string" && citeKey.trim()) map.set(itemKey, citeKey);
       }
@@ -317,9 +336,9 @@ export class ZoteroAPI {
         throw: false,
       });
       if (r.status === 200) {
-        const d = r.json;
-        if (!d?.error && d?.result) {
-          const items = JSON.parse(d.result);
+        const d = asJsonRpcResponse(r.json);
+        if (!d.error) {
+          const items = parseJsonArray(d.result);
           for (const it of items) {
             const item = this.normalizeAny(it);
             if (item.key && keys.includes(item.key)) map.set(item.key, item);
@@ -356,9 +375,9 @@ export class ZoteroAPI {
           }),
           throw: false,
         });
-        const d = r.json;
-        if (r.status === 200 && !d.error && d.result) {
-          const items = JSON.parse(d.result);
+        const d = asJsonRpcResponse(r.json);
+        if (r.status === 200 && !d.error) {
+          const items = parseJsonArray(d.result);
           for (const it of items) {
             const item = this.normalizeAny(it);
             const found = item.key ? reverse.get(item.key) : undefined;
@@ -425,8 +444,8 @@ ORDER BY i.key, ic.orderIndex;`;
       const { execAsync, buildEnv } = await import("./ExportManager");
       const { stdout: fieldsRaw } = await execAsync(`sqlite3 -json ${this.q(tmpDb)} ${this.q(fieldSql)}`, { timeout: 10000, env: buildEnv() });
       const { stdout: creatorsRaw } = await execAsync(`sqlite3 -json ${this.q(tmpDb)} ${this.q(creatorSql)}`, { timeout: 10000, env: buildEnv() });
-      const fieldRows = JSON.parse(fieldsRaw || "[]");
-      const creatorRows = JSON.parse(creatorsRaw || "[]");
+      const fieldRows = parseSQLiteFieldRows(fieldsRaw);
+      const creatorRows = parseSQLiteCreatorRows(creatorsRaw);
 
       const grouped = new Map<string, { key: string; creators: ZoteroCreator[]; fields: Record<string, string>; itemType?: string }>();
       for (const row of fieldRows) {
@@ -695,6 +714,58 @@ ORDER BY i.key, ic.orderIndex;`;
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asJsonRpcResponse(value: unknown): JsonRpcResponse {
+  if (!isRecord(value)) return {};
+  return {
+    error: isRecord(value.error) ? value.error : undefined,
+    result: value.result,
+  };
+}
+
+function parseJsonArray(input: unknown): unknown[] {
+  if (typeof input !== "string") return [];
+  try {
+    const parsed = JSON.parse(input);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseSQLiteFieldRows(raw: string): SQLiteFieldRow[] {
+  const rows = parseJsonArray(raw || "[]");
+  const out: SQLiteFieldRow[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) continue;
+    const itemKey = toStr(row.itemKey);
+    if (!itemKey) continue;
+    out.push({
+      itemKey,
+      itemType: toStr(row.itemType) || undefined,
+      fieldName: toStr(row.fieldName) || undefined,
+      value: row.value == null ? undefined : toStr(row.value),
+    });
+  }
+  return out;
+}
+
+function parseSQLiteCreatorRows(raw: string): SQLiteCreatorRow[] {
+  const rows = parseJsonArray(raw || "[]");
+  const out: SQLiteCreatorRow[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) continue;
+    const itemKey = toStr(row.itemKey);
+    if (!itemKey) continue;
+    out.push({
+      itemKey,
+      creatorType: toStr(row.creatorType) || undefined,
+      firstName: toStr(row.firstName) || undefined,
+      lastName: toStr(row.lastName) || undefined,
+    });
+  }
+  return out;
 }
 
 /** Safely convert an unknown value to string, avoiding '[object Object]'. */

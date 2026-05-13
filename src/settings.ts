@@ -127,11 +127,13 @@ export class ZoteroSettingTab extends PluginSettingTab {
         dd.addOption("zh", t(this.plugin.settings, "lang.zh"));
         dd.addOption("en", t(this.plugin.settings, "lang.en"));
         dd.setValue(getLanguage(this.plugin.settings));
-        dd.onChange(async (v: string) => {
-          this.plugin.settings.language = v === "en" ? "en" : "zh";
-          await this.plugin.saveSettings();
-          this.plugin.applyLanguage();
-          void this.display();
+        dd.onChange((v: string) => {
+          void (async () => {
+            this.plugin.settings.language = v === "en" ? "en" : "zh";
+            await this.plugin.saveSettings();
+            this.plugin.applyLanguage();
+            await this.display();
+          })();
         });
       });
 
@@ -177,9 +179,11 @@ export class ZoteroSettingTab extends PluginSettingTab {
           dd.addOption(this.plugin.settings.cslStyle, this.plugin.settings.cslStyle);
         }
         dd.setValue(this.plugin.settings.cslStyle);
-        dd.onChange(async (v: string) => {
-          this.plugin.settings.cslStyle = v;
-          await this.plugin.saveSettings();
+        dd.onChange((v: string) => {
+          void (async () => {
+            this.plugin.settings.cslStyle = v;
+            await this.plugin.saveSettings();
+          })();
         });
       });
 
@@ -207,26 +211,28 @@ export class ZoteroSettingTab extends PluginSettingTab {
         dd.addOption("endnote", getModeLabel("endnote", this.plugin.settings, "option"));
         dd.addOption("inline", getModeLabel("inline", this.plugin.settings, "option"));
         dd.setValue(this.plugin.settings.citationMode);
-        dd.onChange(async (v: string) => {
-          this.plugin.settings.citationMode = v;
-          await this.plugin.saveSettings();
-          const editor = this.plugin.getEditor();
-          if (!editor) return;
-          const content = editor.getValue();
-          const all = CitationManager.parseAllCitations(content);
-          if (!all.length) {
+        dd.onChange((v: string) => {
+          void (async () => {
+            this.plugin.settings.citationMode = v;
+            await this.plugin.saveSettings();
+            const editor = this.plugin.getEditor();
+            if (!editor) return;
+            const content = editor.getValue();
+            const all = CitationManager.parseAllCitations(content);
+            if (!all.length) {
+              this.plugin.refreshEditorExtension();
+              return;
+            }
+            const keys = [...new Set(all.map((c: CitationRef) => c.key))];
+            const itemMap = await this.plugin.resolveItems(keys);
+            if (!itemMap) return;
+            const count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
             this.plugin.refreshEditorExtension();
-            return;
-          }
-          const keys = [...new Set(all.map((c: CitationRef) => c.key))];
-          const itemMap = await this.plugin.resolveItems(keys);
-          if (!itemMap) return;
-          const count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
-          this.plugin.refreshEditorExtension();
-          new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
-            mode: getModeLabel(v, this.plugin.settings, "short"),
-            count,
-          }));
+            new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
+              mode: getModeLabel(v, this.plugin.settings, "short"),
+              count,
+            }));
+          })();
         });
       });
 
@@ -237,10 +243,12 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setDesc(t(this.plugin.settings, "settings.wordDisplayDesc"))
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.showWordStyleFootnotes);
-        toggle.onChange(async (v: boolean) => {
-          this.plugin.settings.showWordStyleFootnotes = v;
-          await this.plugin.saveSettings();
-          this.plugin.refreshEditorExtension();
+        toggle.onChange((v: boolean) => {
+          void (async () => {
+            this.plugin.settings.showWordStyleFootnotes = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshEditorExtension();
+          })();
         });
       });
 
@@ -250,11 +258,13 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setDesc(t(this.plugin.settings, "settings.showToolbarDesc"))
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.showToolbar);
-        toggle.onChange(async (v: boolean) => {
-          this.plugin.settings.showToolbar = v;
-          await this.plugin.saveSettings();
-          this.plugin.refreshToolbars();
-          void this.display(); // re-render to show/hide sub-toggles
+        toggle.onChange((v: boolean) => {
+          void (async () => {
+            this.plugin.settings.showToolbar = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshToolbars();
+            await this.display(); // re-render to show/hide sub-toggles
+          })();
         });
       });
 
@@ -276,10 +286,12 @@ export class ZoteroSettingTab extends PluginSettingTab {
           .setName(t(this.plugin.settings, labelKey))
           .addToggle((toggle) => {
             toggle.setValue(this.plugin.settings.toolbarButtons[key]);
-            toggle.onChange(async (v: boolean) => {
-              this.plugin.settings.toolbarButtons[key] = v;
-              await this.plugin.saveSettings();
-              this.plugin.refreshToolbars();
+            toggle.onChange((v: boolean) => {
+              void (async () => {
+                this.plugin.settings.toolbarButtons[key] = v;
+                await this.plugin.saveSettings();
+                this.plugin.refreshToolbars();
+              })();
             });
           });
       }
@@ -294,18 +306,22 @@ export class ZoteroSettingTab extends PluginSettingTab {
         text
           .setPlaceholder(t(this.plugin.settings, "settings.pandocPathPlaceholder"))
           .setValue(this.plugin.settings.pandocPath)
-          .onChange(async (v: string) => {
-          this.plugin.settings.pandocPath = v.trim() || "pandoc";
-          await this.plugin.saveSettings();
-        })
+          .onChange((v: string) => {
+            void (async () => {
+              this.plugin.settings.pandocPath = v.trim() || "pandoc";
+              await this.plugin.saveSettings();
+            })();
+          })
       );
     new Setting(containerEl)
       .setName(t(this.plugin.settings, "settings.pandocFlags"))
       .setDesc(t(this.plugin.settings, "settings.pandocFlagsDesc"))
       .addText((text) =>
-        text.setPlaceholder("").setValue(this.plugin.settings.pandocFlags).onChange(async (v: string) => {
-          this.plugin.settings.pandocFlags = v.trim();
-          await this.plugin.saveSettings();
+        text.setPlaceholder("").setValue(this.plugin.settings.pandocFlags).onChange((v: string) => {
+          void (async () => {
+            this.plugin.settings.pandocFlags = v.trim();
+            await this.plugin.saveSettings();
+          })();
         })
       );
     new Setting(containerEl)
@@ -313,10 +329,12 @@ export class ZoteroSettingTab extends PluginSettingTab {
       .setDesc(t(this.plugin.settings, "settings.useDefaultExportDirDesc"))
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.useDefaultExportDir);
-        toggle.onChange(async (v: boolean) => {
-          this.plugin.settings.useDefaultExportDir = v;
-          await this.plugin.saveSettings();
-          void this.display();
+        toggle.onChange((v: boolean) => {
+          void (async () => {
+            this.plugin.settings.useDefaultExportDir = v;
+            await this.plugin.saveSettings();
+            await this.display();
+          })();
         });
       });
     if (this.plugin.settings.useDefaultExportDir) {
@@ -327,10 +345,12 @@ export class ZoteroSettingTab extends PluginSettingTab {
           text
             .setPlaceholder(t(this.plugin.settings, "settings.defaultExportDirPlaceholder"))
             .setValue(this.plugin.settings.exportOutputDir)
-            .onChange(async (v: string) => {
-            this.plugin.settings.exportOutputDir = v.trim();
-            await this.plugin.saveSettings();
-          })
+            .onChange((v: string) => {
+              void (async () => {
+                this.plugin.settings.exportOutputDir = v.trim();
+                await this.plugin.saveSettings();
+              })();
+            })
         );
     }
 

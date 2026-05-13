@@ -352,7 +352,7 @@ function getActiveWindow(): Window {
 
 function getActiveDocument(): Document {
   const maybeWin = window as Window & { activeDocument?: Document };
-  return maybeWin.activeDocument ?? document;
+  return maybeWin.activeDocument ?? getActiveWindow().document;
 }
 
 function createDivEl(options?: { cls?: string }): HTMLDivElement {
@@ -413,7 +413,7 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
 
   activePopover = { target, popover, component, hideTimer: null, reposition, onPopoverEnter, onPopoverLeave };
   reposition();
-  requestAnimationFrame(reposition);
+  getActiveWindow().requestAnimationFrame(reposition);
 
   if (spec.markdown.trim()) {
     void renderPopoverMarkdown(preview, spec, component, target, reposition);
@@ -426,7 +426,7 @@ async function renderPopoverMarkdown(preview: HTMLElement, spec: PopoverSpec, co
     await MarkdownRenderer.render(spec.app, spec.markdown, preview, spec.getSourcePath(), component);
     if (activePopover?.target !== target) return;
     reposition();
-    requestAnimationFrame(reposition);
+    getActiveWindow().requestAnimationFrame(reposition);
   } catch {
     if (!preview.textContent?.trim()) preview.setText(spec.fallbackText);
   }
