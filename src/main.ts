@@ -299,6 +299,20 @@ export default class ZoteroCitations extends obsidian.Plugin {
     }
   }
 
+  async fetchAndCacheRemote(key: string): Promise<ZoteroItem | null> {
+    try {
+      const map = await this.api.getItemsByKeysRemote([key]);
+      const item = map.get(key) ?? null;
+      if (item) {
+        item.key = key;
+        this.cacheItem(item);
+      }
+      return item;
+    } catch {
+      return null;
+    }
+  }
+
   // ══ Commands ══════════════════════════════════════════════════════════════
   getEditor(): EditorLike | null {
     return this.app.workspace.getActiveViewOfType(obsidian.MarkdownView)?.editor ?? null;

@@ -129,6 +129,13 @@ a.zotero-rendered-footnote-ref {
   border-radius: 6px;
 }
 
+.zotero-footnote-locator-warning {
+  padding: 0 12px 10px;
+  color: var(--text-warning);
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
 /* Settings */
 .zotero-status-dot {
   display: inline-block;

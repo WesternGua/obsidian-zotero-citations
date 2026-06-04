@@ -1,15 +1,12 @@
-# Zotero Citations v0.2.4
+# Zotero Citations v0.2.5
 
-## Community review follow-ups
+## Locator editing reliability and safety
 
-- Fixed remaining CSS review issues:
-  - removed duplicate selectors
-  - removed `!important`
-  - removed `:has()` selectors
-  - replaced in-text underline with `border-bottom` styling for compatibility
-- Kept in-text citation behavior unchanged:
-  - plugin-managed in Obsidian
-  - exported as paragraph text in Word (not footnotes)
+- Fixed locator edits sometimes failing with “Could not find the active editor”.
+- Blocked locator edits while Zotero is offline to avoid regenerating citations from stale cached metadata.
+- Added live reconnect checks so the locator editor unlocks after Zotero comes back online.
+- Added Node HTTP fallbacks for Zotero ping and Better BibTeX JSON-RPC reads when Obsidian `requestUrl` misreports the local connector.
+- Fixed remote item fetching during locator saves so it no longer loses plugin context and incorrectly reports missing Zotero items.
 
 ---
 

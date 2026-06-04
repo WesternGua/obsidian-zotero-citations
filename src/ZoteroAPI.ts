@@ -124,7 +124,17 @@ export class ZoteroAPI {
   async ping(): Promise<boolean> {
     try {
       const r = await requestUrl({ url: `${this.baseUrl}/connector/ping`, method: "GET", throw: false });
-      return r.status === 200;
+      if (r.status === 200) return true;
+    } catch {
+      // Fall back below.
+    }
+
+    // Obsidian's requestUrl can occasionally report ERR_EMPTY_RESPONSE for
+    // Zotero's local connector even while Zotero is listening. Fall back to
+    // Node's HTTP client so locator-editor locks reflect the real state.
+    try {
+      const body = await this.httpGet(`${this.baseUrl}/connector/ping`, 3000);
+      return body.toLowerCase().includes("zotero");
     } catch {
       return false;
     }
@@ -277,15 +287,7 @@ export class ZoteroAPI {
   async searchItems(query: string): Promise<ZoteroItem[]> {
     if (!query.trim()) return [];
     try {
-      const r = await requestUrl({
-        url: `${this.baseUrl}/better-bibtex/json-rpc`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", method: "item.search", params: [query], id: 1 }),
-        throw: false,
-      });
-      if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
-      const d = asJsonRpcResponse(r.json);
+      const d = await this.bbtJsonRpc("item.search", [query], 1);
       if (d.error) throw new Error(toStr(d.error.message) || "Zotero JSON-RPC error");
       const result = Array.isArray(d.result) ? d.result : [];
       return result.map((item) => this.normalizeAny(item)).filter((item) => item.title.length > 0);
@@ -298,15 +300,7 @@ export class ZoteroAPI {
     const map = new Map<string, string>();
     if (!itemKeys.length) return map;
     try {
-      const r = await requestUrl({
-        url: `${this.baseUrl}/better-bibtex/json-rpc`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", method: "item.citationkey", params: [itemKeys], id: 2 }),
-        throw: false,
-      });
-      if (r.status !== 200) return map;
-      const d = asJsonRpcResponse(r.json);
+      const d = await this.bbtJsonRpc("item.citationkey", [itemKeys], 2);
       if (d.error || !isRecord(d.result)) return map;
       for (const [itemKey, citeKey] of Object.entries(d.result)) {
         if (typeof citeKey === "string" && citeKey.trim()) map.set(itemKey, citeKey);
@@ -318,31 +312,33 @@ export class ZoteroAPI {
   }
 
   async getItemsByKeys(keys: string[], libraryID: number = 1): Promise<Map<string, ZoteroItem>> {
+    const map = await this.getItemsByKeysRemote(keys, libraryID);
+    const stillMissing = keys.filter((k) => !map.has(k));
+    if (!stillMissing.length) return map;
+
+    // Fallback: local DB
+    try {
+      const dbItems = await this.getItemsFromLocalDB(stillMissing);
+      for (const [k, v] of dbItems) map.set(k, v);
+    } catch {
+      // ignore lookup failures and return partial results
+    }
+
+    return map;
+  }
+
+  async getItemsByKeysRemote(keys: string[], libraryID: number = 1): Promise<Map<string, ZoteroItem>> {
     const map = new Map<string, ZoteroItem>();
     if (!keys.length) return map;
 
     // Try via export
     try {
-      const r = await requestUrl({
-        url: `${this.baseUrl}/better-bibtex/json-rpc`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "item.export",
-          params: [keys, "f4b52ab0-f878-4556-85a0-c7aeedd09dfc", libraryID],
-          id: 3,
-        }),
-        throw: false,
-      });
-      if (r.status === 200) {
-        const d = asJsonRpcResponse(r.json);
-        if (!d.error) {
-          const items = parseJsonArray(d.result);
-          for (const it of items) {
-            const item = this.normalizeAny(it);
-            if (item.key && keys.includes(item.key)) map.set(item.key, item);
-          }
+      const d = await this.bbtJsonRpc("item.export", [keys, "f4b52ab0-f878-4556-85a0-c7aeedd09dfc", libraryID], 3);
+      if (!d.error) {
+        const items = parseJsonArray(d.result);
+        for (const it of items) {
+          const item = this.normalizeAny(it);
+          if (item.key && keys.includes(item.key)) map.set(item.key, item);
         }
       }
     } catch {
@@ -363,20 +359,8 @@ export class ZoteroAPI {
         reverse.set(citeKey, itemKey);
       }
       if (citeKeys.length) {
-        const r = await requestUrl({
-          url: `${this.baseUrl}/better-bibtex/json-rpc`,
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            method: "item.export",
-            params: [citeKeys, "f4b52ab0-f878-4556-85a0-c7aeedd09dfc", libraryID],
-            id: 4,
-          }),
-          throw: false,
-        });
-        const d = asJsonRpcResponse(r.json);
-        if (r.status === 200 && !d.error) {
+        const d = await this.bbtJsonRpc("item.export", [citeKeys, "f4b52ab0-f878-4556-85a0-c7aeedd09dfc", libraryID], 4);
+        if (!d.error) {
           const items = parseJsonArray(d.result);
           for (const it of items) {
             const item = this.normalizeAny(it);
@@ -385,16 +369,6 @@ export class ZoteroAPI {
           }
         }
       }
-    } catch {
-      // ignore lookup failures and return partial results
-    }
-
-    // Fallback: local DB
-    const stillMissing = keys.filter((k) => !map.has(k));
-    if (!stillMissing.length) return map;
-    try {
-      const dbItems = await this.getItemsFromLocalDB(stillMissing);
-      for (const [k, v] of dbItems) map.set(k, v);
     } catch {
       // ignore lookup failures and return partial results
     }
@@ -573,6 +547,67 @@ ORDER BY i.key, ic.orderIndex;`;
         resolve("");
       });
     });
+  }
+
+  private httpPostJson(url: string, data: unknown, timeoutMs: number = 30000): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const body = JSON.stringify(data);
+      const req = nodeHttp.request(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf-8").trim();
+            const status = res.statusCode ?? 0;
+            if (status < 200 || status >= 300) {
+              reject(new ZoteroConnectionError(`HTTP ${status}: ${text}`));
+              return;
+            }
+            try {
+              resolve(text ? JSON.parse(text) : null);
+            } catch (err) {
+              reject(err instanceof Error ? err : new Error(String(err)));
+            }
+          });
+          res.on("error", (e: Error) => reject(new ZoteroConnectionError(e.message)));
+        },
+      );
+      req.on("error", (e: Error) => reject(new ZoteroConnectionError(e.message)));
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        reject(new ZoteroConnectionError("HTTP timeout"));
+      });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  private async bbtJsonRpc(method: string, params: unknown[], id: number): Promise<JsonRpcResponse> {
+    const payload = { jsonrpc: "2.0", method, params, id };
+    try {
+      const r = await requestUrl({
+        url: `${this.baseUrl}/better-bibtex/json-rpc`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        throw: false,
+      });
+      if (r.status === 200) return asJsonRpcResponse(r.json);
+    } catch {
+      // Fall back below.
+    }
+
+    // Same rationale as ping(): requestUrl may fail against Zotero's local
+    // server while Node HTTP succeeds. Use this fallback for live Zotero reads.
+    return asJsonRpcResponse(await this.httpPostJson(`${this.baseUrl}/better-bibtex/json-rpc`, payload));
   }
 
   private extractArray(data: unknown): JsonObject[] {

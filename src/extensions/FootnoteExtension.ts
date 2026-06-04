@@ -55,6 +55,7 @@ class FnWidget extends WidgetType {
     public preview: PreviewInfo,
     public app: App,
     public getSourcePath: () => string,
+    public sourceView: EditorView,
     public identifier: string,
     public domId: string,
     public isHighlighted: boolean = false,
@@ -106,6 +107,7 @@ class FnWidget extends WidgetType {
     attachRenderedPopover(marker, {
       app: this.app,
       getSourcePath: this.getSourcePath,
+      sourceView: this.sourceView,
       markdown: this.preview.markdown,
       fallbackText: text,
       edit: this.preview.edit || undefined,
@@ -152,6 +154,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
   if (!renderFootnoteMarkers && !inTextCitations.length) return Decoration.none;
 
   const sel = view.state.selection.main;
+  const sourcePath = options.getSourcePath();
   const endnotePreviews = buildEndnotePreviewMap(doc, options.app);
 
   const hits: Array<{
@@ -249,7 +252,7 @@ function buildDeco(view: EditorView, options: FootnoteExtensionOptions) {
       Decoration.replace({
         widget: new FnWidget(
           num, { markdown, text, display, edit }, options.app,
-          options.getSourcePath, identifier, domId,
+          () => sourcePath, view, identifier, domId,
           isInsideHighlight(doc, start, end),
         ),
       }).range(start, end),
@@ -404,15 +407,18 @@ let activePopover: {
 interface PopoverSpec {
   app: App;
   getSourcePath: () => string;
+  sourceView?: EditorView;
   markdown: string;
   fallbackText: string;
   edit?: EditInfo;
 }
 
 interface ZoteroPluginLike {
+  api?: { ping: () => Promise<boolean> };
   settings: { cslStyle: string };
   getCached: (key: string) => ZoteroItem | undefined;
   fetchAndCache: (key: string) => Promise<ZoteroItem | null>;
+  fetchAndCacheRemote?: (key: string) => Promise<ZoteroItem | null>;
 }
 
 type AppWithPlugins = App & {
@@ -515,15 +521,61 @@ function mountLocatorEditor(container: HTMLElement, spec: PopoverSpec, target: H
   input.placeholder = appT(spec.app, "footnote.locatorPlaceholder");
   const btnRow = wrap.createDiv();
   const saveBtn = btnRow.createEl("button", { text: appT(spec.app, "footnote.saveLocator"), cls: "mod-cta" });
+  const warning = container.createDiv({ cls: "zotero-footnote-locator-warning" });
+
+  let saving = false;
+  let retryTimer: number | null = null;
+
+  const setLocked = (locked: boolean, message = "") => {
+    input.disabled = locked || saving;
+    saveBtn.disabled = locked || saving;
+    warning.setText(message);
+    warning.style.display = message ? "" : "none";
+  };
+
+  const stopRetry = () => {
+    if (retryTimer != null) getActiveWindow().clearInterval(retryTimer);
+    retryTimer = null;
+  };
+
+  const checkConnection = async () => {
+    const doc = container.ownerDocument ?? getActiveDocument();
+    if (!doc.body.contains(container)) {
+      stopRetry();
+      return;
+    }
+
+    const plugin = (spec.app as AppWithPlugins).plugins?.plugins?.["zotero-citations"];
+    const isConnected = await plugin?.api?.ping?.();
+    if (isConnected) {
+      setLocked(false);
+      stopRetry();
+      return;
+    }
+
+    setLocked(true, appT(spec.app, "footnote.zoteroOffline"));
+    if (retryTimer == null) retryTimer = getActiveWindow().setInterval(() => { void checkConnection(); }, 1500);
+  };
+
+  setLocked(true);
+  // mountLocatorEditor() runs before the popover is appended to the document.
+  // Defer the first connectivity check so it does not stop before pinging.
+  getActiveWindow().setTimeout(() => { void checkConnection(); }, 0);
 
   const save = async () => {
+    saving = true;
     saveBtn.disabled = true;
     const ok = await applyLocatorEdit(spec, input.value.trim());
-    saveBtn.disabled = false;
-    if (ok && activePopover?.target === target) destroyActivePopover();
+    saving = false;
+    if (ok && activePopover?.target === target) {
+      stopRetry();
+      destroyActivePopover();
+      return;
+    }
+    await checkConnection();
   };
   saveBtn.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); void save(); });
-  input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); void save(); } });
+  input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !saveBtn.disabled) { event.preventDefault(); void save(); } });
 }
 
 async function applyLocatorEdit(spec: PopoverSpec, locator: string): Promise<boolean> {
@@ -532,32 +584,95 @@ async function applyLocatorEdit(spec: PopoverSpec, locator: string): Promise<boo
     new Notice(appT(spec.app, "footnote.noEditor"));
     return false;
   }
+
   const plugin = (spec.app as AppWithPlugins).plugins?.plugins?.["zotero-citations"];
-  const view = spec.app.workspace.getActiveViewOfType(MarkdownView);
-  const editor = view?.editor;
-  if (!plugin || !editor) {
+  if (!plugin) {
     new Notice(appT(spec.app, "footnote.noEditor"));
     return false;
   }
-  const item = plugin.getCached(edit.key) || await plugin.fetchAndCache(edit.key);
+
+  const isConnected = await plugin.api?.ping?.();
+  if (!isConnected) {
+    new Notice(appT(spec.app, "footnote.zoteroOffline"), 7000);
+    return false;
+  }
+
+  // Saving a locator regenerates the whole citation string. Do not use the
+  // local item cache here, or a locator-only edit could overwrite the citation
+  // with stale metadata while Zotero is closed or requestUrl is stale.
+  const item = plugin.fetchAndCacheRemote
+    ? await plugin.fetchAndCacheRemote(edit.key)
+    : await plugin.fetchAndCache(edit.key);
   if (!item) {
     new Notice(appT(spec.app, "footnote.noItem"));
     return false;
   }
+
   const page = locator || undefined;
   const style = plugin.settings.cslStyle;
-  if (edit.kind === "inline") {
-    const replacement = CitationManager.buildInlineFootnote(item, style, page);
-    editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
-  } else if (edit.kind === "intext") {
-    const replacement = CitationManager.buildInTextCitation(item, style, page);
-    editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
-  } else {
-    const replacement = CitationManager.buildEndnoteDef(edit.label, item, style, page);
-    editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+  const replacement = buildReplacement(edit, item, style, page);
+
+  if (replaceInSourceView(spec.sourceView, edit, replacement)) {
+    new Notice(appT(spec.app, "footnote.updated"));
+    return true;
   }
+
+  const view = findMarkdownViewForEdit(spec);
+  const editor = view?.editor;
+  if (!editor) {
+    new Notice(appT(spec.app, "footnote.noEditor"));
+    return false;
+  }
+
+  editor.replaceRange(replacement, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
   new Notice(appT(spec.app, "footnote.updated"));
   return true;
+}
+
+function buildReplacement(edit: EditInfo, item: ZoteroItem, style: string, page?: string): string {
+  if (edit.kind === "inline") return CitationManager.buildInlineFootnote(item, style, page);
+  if (edit.kind === "intext") return CitationManager.buildInTextCitation(item, style, page);
+  return CitationManager.buildEndnoteDef(edit.label, item, style, page);
+}
+
+function replaceInSourceView(view: EditorView | undefined, edit: EditInfo, replacement: string): boolean {
+  if (!view) return false;
+  const doc = view.state.doc;
+  if (edit.from < 0 || edit.to < edit.from || edit.to > doc.length) return false;
+
+  const current = doc.sliceString(edit.from, edit.to);
+  // Avoid writing into a stale offset if the document changed while the popover
+  // was open. The active-editor fallback below can still handle normal cases.
+  if (!current.includes("zotero") || !current.includes(edit.key)) return false;
+
+  try {
+    view.dispatch({
+      changes: { from: edit.from, to: edit.to, insert: replacement },
+      selection: { anchor: edit.from + replacement.length },
+      scrollIntoView: true,
+    });
+    view.focus();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findMarkdownViewForEdit(spec: PopoverSpec): MarkdownView | null {
+  const active = spec.app.workspace.getActiveViewOfType(MarkdownView);
+  const sourcePath = spec.getSourcePath();
+  if (!sourcePath) return active ?? null;
+
+  if (active?.file?.path === sourcePath) return active;
+
+  let found: MarkdownView | null = null;
+  spec.app.workspace.iterateAllLeaves((leaf) => {
+    if (found) return;
+    if (leaf.view instanceof MarkdownView && leaf.view.file?.path === sourcePath) {
+      found = leaf.view;
+    }
+  });
+  return found ?? active ?? null;
 }
 
 function positionPopover(target: HTMLElement, popover: HTMLElement): void {

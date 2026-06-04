@@ -6,6 +6,20 @@
 
 ---
 
+## [0.2.5] - 2026-06-04
+
+### 修复
+
+- 修复定位符（locator）编辑弹窗在部分脚注上提示“找不到当前编辑器”的问题：现在会优先使用创建脚注预览的 CodeMirror 视图写回，并按源文件路径查找对应 Markdown 编辑器。
+- 修复 Zotero 关闭时仍可用本地缓存修改 locator、进而可能用旧元数据重写整条引用的问题：locator 保存前会检测 Zotero 连接，离线时锁定输入框并提示用户先打开 Zotero。
+- 修复 Obsidian `requestUrl` 偶发误判本地 Zotero/Better BibTeX 连接失败的问题：Zotero ping 与 BBT JSON-RPC 读取增加 Node HTTP fallback。
+- 修复 locator 保存使用远程取数方法时 `this` 上下文丢失，导致总是提示“未能读取 Zotero 条目”的问题。
+
+### 改进
+
+- locator 编辑期间会定时重试 Zotero 连接；Zotero 恢复连接后，当前弹窗会自动解锁输入框和保存按钮。
+- locator 保存改为强制从 Zotero/Better BibTeX 重新读取条目数据，不再优先使用插件缓存，降低旧缓存覆盖引用文本的风险。
+
 ## [0.2.4] - 2026-05-13
 
 ### 新增
