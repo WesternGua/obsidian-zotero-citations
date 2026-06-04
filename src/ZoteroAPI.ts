@@ -140,6 +140,15 @@ export class ZoteroAPI {
     }
   }
 
+  async pingBBT(): Promise<boolean> {
+    try {
+      const text = await this.httpGet(`${this.baseUrl}/better-bibtex/cayw?probe=true`, 3000, true);
+      return typeof text === "string";
+    } catch {
+      return false;
+    }
+  }
+
   // ════════════════════════════════════════════════════════════════════════════
   // IMPROVEMENT 2: Dynamic CSL style reading
   // ════════════════════════════════════════════════════════════════════════════
@@ -242,23 +251,47 @@ export class ZoteroAPI {
   // ════════════════════════════════════════════════════════════════════════════
 
   async openCAYW(onReturn?: () => void): Promise<CaywResult[]> {
+    const startTime = Date.now();
     const rawText = await this.httpGet(
-      `http://127.0.0.1:${this.port}/better-bibtex/cayw?format=json`,
-      600000 // 10 min
+      `${this.baseUrl}/better-bibtex/cayw?format=json`,
+      600000, // 10 min
+      true, // non-2xx means the CAYW endpoint itself failed
     );
+    const elapsed = Date.now() - startTime;
     try {
       onReturn?.();
     } catch {
       // ignore callback errors
     }
 
-    if (!rawText || rawText === "[]" || rawText === "null" || rawText === "{}") return [];
+    // BBT returns an empty body when the user cancels the real picker. When the
+    // endpoint returns immediately, however, Zotero never had a chance to show a
+    // usable picker; surface that as an explicit plugin error instead of silently
+    // treating it as a cancellation. This is the failure mode seen when CAYW is
+    // broken by an incompatible Better BibTeX/Zotero combination.
+    if (!rawText) {
+      if (elapsed < 1500) {
+        throw new ZoteroPickerError(
+          "Better BibTeX CAYW returned an empty response before the picker could open. Better BibTeX may be disabled or incompatible with this Zotero version.",
+        );
+      }
+      return [];
+    }
+
+    if (rawText === "[]") return [];
+    if (rawText === "null" || rawText === "{}") {
+      throw new ZoteroPickerError(
+        "Better BibTeX CAYW returned an empty JSON response. Better BibTeX may be disabled or incompatible with this Zotero version.",
+      );
+    }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawText);
     } catch {
-      return [];
+      // Non-JSON response means BBT returned something unexpected, for example
+      // its plain-text "CAYW failed" error body. Do not swallow it silently.
+      throw new ZoteroPickerError(`Unexpected response from Better BibTeX CAYW: ${snippet(rawText)}`);
     }
 
     const rawItems = this.extractArray(parsed);
@@ -533,18 +566,26 @@ ORDER BY i.key, ic.orderIndex;`;
     return null;
   }
 
-  private httpGet(url: string, timeoutMs: number = 30000): Promise<string> {
+  private httpGet(url: string, timeoutMs: number = 30000, expectStatus2xx = false): Promise<string> {
     return new Promise((resolve, reject) => {
       const req = nodeHttp.get(url, (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8").trim()));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf-8").trim();
+          const status = res.statusCode ?? 0;
+          if (expectStatus2xx && (status < 200 || status >= 300)) {
+            reject(new ZoteroPickerError(`Better BibTeX CAYW HTTP ${status}: ${snippet(text)}`));
+            return;
+          }
+          resolve(text);
+        });
         res.on("error", (e: Error) => reject(new ZoteroConnectionError(e.message)));
       });
       req.on("error", (e: Error) => reject(new ZoteroConnectionError(e.message)));
       req.setTimeout(timeoutMs, () => {
         req.destroy();
-        resolve("");
+        reject(new ZoteroConnectionError("HTTP timeout"));
       });
     });
   }
@@ -762,6 +803,12 @@ function asJsonRpcResponse(value: unknown): JsonRpcResponse {
     error: isRecord(value.error) ? value.error : undefined,
     result: value.result,
   };
+}
+
+function snippet(text: string, max = 200): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return "(empty response)";
+  return compact.length > max ? `${compact.slice(0, max)}…` : compact;
 }
 
 function parseJsonArray(input: unknown): unknown[] {

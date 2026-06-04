@@ -105,6 +105,13 @@ export default class ZoteroCitations extends obsidian.Plugin {
     await this.loadSettings();
     this.api = new ZoteroAPI(this.settings.zoteroPort);
 
+    // Warn if Zotero is reachable but BBT's CAYW endpoint is not (version mismatch, BBT not installed, etc.)
+    void this.api.ping().then(async (zoteroUp) => {
+      if (!zoteroUp) return;
+      const bbtUp = await this.api.pingBBT();
+      if (!bbtUp) new obsidian.Notice(this.t("notice.bbtUnavailable"), 8000);
+    });
+
     obsidian.addIcon("zotero-z", ZOTERO_ICON);
     obsidian.addIcon("zotero-cite", ZOTERO_CITE_ICON);
     obsidian.addIcon("zotero-word-display", ZOTERO_WORD_DISPLAY_ICON);
@@ -431,16 +438,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
       if (err instanceof ZoteroConnectionError) {
         new obsidian.Notice(this.t("notice.connectZoteroFailed"), 6000);
       } else if (err instanceof ZoteroPickerError) {
-        new obsidian.Notice(this.t("notice.nativePickerFallback"), 5000);
-        this.openSearchFallback(
-          editor,
-          existingInline?.page,
-          existingEndnote?.page,
-          existingInText?.page,
-          existingInline,
-          existingEndnote,
-          existingInText,
-        );
+        new obsidian.Notice(this.t("notice.bbtCaywError", { error: err.message || String(err) }), 10000);
       } else {
         new obsidian.Notice(this.t("notice.pickerError", { error: String(err) }), 6000);
       }
