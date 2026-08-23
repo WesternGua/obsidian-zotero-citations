@@ -30,6 +30,7 @@ zotero-citations/
 ```bash
 npm install
 npm run check
+npm test
 npm run build
 ```
 
@@ -59,8 +60,9 @@ Likewise, `data.json` is local runtime state and should stay untracked. In contr
 ## Suggested Release Checklist
 
 1. Run `npm run check`
-2. Run `npm run build`
-3. Update `CHANGELOG.md`
-4. Bump the version with `npm version ...`
-5. Confirm `manifest.json` and `versions.json` were updated
-6. Attach `main.js`, `manifest.json`, and `styles.css` to the GitHub release if distributing release artifacts
+2. Run `npm test`
+3. Run `npm run build`
+4. Update `CHANGELOG.md`
+5. Bump the version with `npm version ...`
+6. Confirm `manifest.json` and `versions.json` were updated
+7. Attach `main.js`, `manifest.json`, and `styles.css` to the GitHub release if distributing release artifacts

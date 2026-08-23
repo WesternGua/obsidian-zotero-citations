@@ -1,13 +1,26 @@
 # Third-Party Notices
 
-This plugin bundle includes or references third-party components mentioned inside the built `main.js` file.
+## citeproc-js
 
-## Bundled libraries noted in the build output
+This plugin bundles `citeproc` / citeproc-js, copyright © 2009–2019 Frank Bennett.
+It is distributed under the CPAL 1.0 or, at the recipient's option, the AGPL 3.0.
+Source and license information: https://github.com/Juris-M/citeproc-js
 
-- **JSZip v3.10.1** — noted in the bundle as dual-licensed under MIT or GPLv3
-- **pako** — noted in the bundle as MIT-licensed
+## CSL locale data
 
-Please review the upstream projects for the full license texts and current terms:
+This plugin bundles CSL locale data through `@manuscripts/csl-locales`. The data
+is derived from the Citation Style Language Locales project and is licensed
+under Creative Commons Attribution-ShareAlike 3.0 Unported.
 
-- JSZip: <https://github.com/Stuk/jszip>
-- pako: <https://github.com/nodeca/pako>
+CSL project: https://citationstyles.org/
+Locale source: https://github.com/citation-style-language/locales
+
+The translator/contributor metadata contained in the locale data is preserved.
+
+## Test-only CSL styles
+
+The IEEE and APA CSL files under `tests/fixtures/styles/` are included only as
+automated test fixtures. They come from the Citation Style Language styles
+repository and are distributed under CC BY-SA 3.0.
+
+Style source: https://github.com/citation-style-language/styles

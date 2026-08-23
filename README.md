@@ -11,7 +11,8 @@
 - **Insert citations** — Invokes Zotero's native citation picker or an in-plugin search modal, with support for page/paragraph locators
 - **Footnote / endnote / in-text** — Freely switch between footnote mode (`^[citation text]`), endnote mode (`[^1]` + endnote definitions), and in-text mode (plain-text author-year citations)
 - **Word-style display** — Footnote markers render as superscript numbers in the editor; hover to preview the full citation and edit locators
-- **Document preferences** — Dynamically reads all CSL styles installed in Zotero, with one-click style and mode switching
+- **Zotero-only CSL styles** — Shows and uses only styles currently installed in Zotero; there are no built-in or approximate fallback styles
+- **Matching CSL output** — Uses Zotero's style files and locale rules, including dependent styles, bibliography sorting, and citation clusters
 - **Bibliography** — Auto-generates a formatted reference list from all citations in the current document
 - **Export to Word** — Converts Markdown to `.docx` via Pandoc; footnote/endnote modes preserve note structure, while in-text mode exports citations as plain paragraph text
 - **Bilingual UI** — Switch between Chinese and English in settings

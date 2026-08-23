@@ -4,13 +4,14 @@
  */
 import * as obsidian from "obsidian";
 import { CitationManager, EndnoteDef, InTextCitation, InlineCitation, MinimalEditor } from "./CitationManager";
+import { CslEngine } from "./CslEngine";
 import { ExportManager } from "./ExportManager";
 import { createFootnoteExtension } from "./extensions/FootnoteExtension";
 import { appT, I18nValue, t } from "./i18n";
 import { ExportModal } from "./modals/ExportModal";
 import { PreferencesModal } from "./modals/PreferencesModal";
 import { SearchModal } from "./modals/SearchModal";
-import { DEFAULT_SETTINGS, ZoteroCitationsSettings, ZoteroSettingTab } from "./settings";
+import { DEFAULT_SETTINGS, syncInstalledStyles, ZoteroCitationsSettings, ZoteroSettingTab } from "./settings";
 import {
   CaywResult,
   formatLocator,
@@ -104,6 +105,13 @@ export default class ZoteroCitations extends obsidian.Plugin {
   private async initialize(): Promise<void> {
     await this.loadSettings();
     this.api = new ZoteroAPI(this.settings.zoteroPort);
+    const installedStyles = syncInstalledStyles(this.api);
+    if (this.settings.cslStyle && !installedStyles.some((style) => style.id === this.settings.cslStyle)) {
+      const removedStyle = this.settings.cslStyle;
+      this.settings.cslStyle = "";
+      await this.saveSettings();
+      new obsidian.Notice(this.t("notice.styleRemoved", { style: removedStyle }), 8000);
+    }
 
     // Warn if Zotero is reachable but BBT's CAYW endpoint is not (version mismatch, BBT not installed, etc.)
     void this.api.ping().then(async (zoteroUp) => {
@@ -419,6 +427,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
 
   // ── Insert / Edit citation (uses Zotero native CAYW picker) ──────────────
   async insertOrEditCitation(editor: EditorLike): Promise<void> {
+    if (!this.ensureInstalledStyle()) return;
     const content = editor.getValue();
     const pos = editor.posToOffset(editor.getCursor());
     const existingInline = CitationManager.isInsideInline(content, pos);
@@ -454,7 +463,11 @@ export default class ZoteroCitations extends obsidian.Plugin {
 
     for (const ci of items) this.cacheItem(ci.item);
     this.restoreEditorSelection(targetEditor, selectionSnapshot);
-    this.applySelectedCitations(targetEditor, items, existingInline, existingEndnote, existingInText);
+    try {
+      this.applySelectedCitations(targetEditor, items, existingInline, existingEndnote, existingInText);
+    } catch (error) {
+      new obsidian.Notice(this.t("notice.styleFormatFailed", { error: String(error) }), 8000);
+    }
     this.refocusObsidianWindow(targetEditor);
   }
 
@@ -470,6 +483,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
 
   // ── Insert bibliography ───────────────────────────────────────────────────
   async insertBibliography(editor: EditorLike): Promise<void> {
+    if (!this.ensureInstalledStyle()) return;
     const content = editor.getValue();
     const all = CitationManager.parseAllCitations(content);
     if (!all.length) {
@@ -481,12 +495,18 @@ export default class ZoteroCitations extends obsidian.Plugin {
     const itemMap = await this.resolveItems(keys);
     if (!itemMap) return;
 
-    const bib = CitationManager.generateBibliography(
-      content,
-      itemMap,
-      this.settings.cslStyle,
-      this.t("bibliography.heading"),
-    );
+    let bib: string;
+    try {
+      bib = CitationManager.generateBibliography(
+        content,
+        itemMap,
+        this.settings.cslStyle,
+        this.t("bibliography.heading"),
+      );
+    } catch (error) {
+      new obsidian.Notice(this.t("notice.styleFormatFailed", { error: String(error) }), 8000);
+      return;
+    }
     if (!bib) {
       new obsidian.Notice(this.t("notice.noBibliography"));
       return;
@@ -498,6 +518,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
 
   // ── Refresh all ───────────────────────────────────────────────────────────
   async refreshAll(editor: EditorLike): Promise<void> {
+    if (!this.ensureInstalledStyle()) return;
     const removedOrphans = CitationManager.removeUnreferencedEndnotes(editor);
     const content = editor.getValue();
     const all = CitationManager.parseAllCitations(content);
@@ -545,7 +566,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
           style,
           existingHeading || this.t("bibliography.heading"),
         );
-        CitationManager.insertOrReplaceBibliography(editor, bib);
+        if (bib) CitationManager.insertOrReplaceBibliography(editor, bib);
       }
 
       const extra = removedOrphans ? this.t("notice.refreshed.extraOrphans", { count: removedOrphans }) : "";
@@ -695,43 +716,59 @@ export default class ZoteroCitations extends obsidian.Plugin {
   ) {
     const style = this.settings.cslStyle;
     const mode = this.settings.citationMode;
+    const selected = items.map((ci) => ({
+      item: ci.item,
+      page: formatLocator(ci.locator, ci.locatorLabel) || undefined,
+    }));
 
-    if (items.length === 1) {
-      const ci = items[0];
-      const page = formatLocator(ci.locator, ci.locatorLabel) || undefined;
-
-      if (existingInline) {
-        CitationManager.replaceInline(editor, existingInline, ci.item, style, page);
-        new obsidian.Notice(this.t("notice.citationUpdated"));
-        return;
-      }
-      if (existingEndnote) {
-        CitationManager.replaceEndnoteDef(editor, existingEndnote, ci.item, style, page);
-        new obsidian.Notice(this.t("notice.citationUpdated"));
-        return;
-      }
-      if (existingInText) {
-        CitationManager.replaceInText(editor, existingInText, ci.item, style, page);
-        new obsidian.Notice(this.t("notice.citationUpdated"));
-        return;
-      }
+    if (existingInline) {
+      CitationManager.replaceInlineGroup(editor, existingInline, selected, style);
+      new obsidian.Notice(this.t("notice.citationUpdated"));
+      return;
+    }
+    if (existingEndnote) {
+      CitationManager.replaceEndnoteDefGroup(editor, existingEndnote, selected, style);
+      new obsidian.Notice(this.t("notice.citationUpdated"));
+      return;
+    }
+    if (existingInText) {
+      CitationManager.replaceInTextGroup(editor, existingInText, selected, style);
+      new obsidian.Notice(this.t("notice.citationUpdated"));
+      return;
     }
 
-    for (const ci of items) {
-      const page = formatLocator(ci.locator, ci.locatorLabel) || undefined;
-      if (mode === "inline") {
-        CitationManager.insertInline(editor, ci.item, style, page);
-      } else if (mode === "intext") {
-        CitationManager.insertInText(editor, ci.item, style, page);
-      } else {
-        CitationManager.insertEndnote(editor, ci.item, style, page);
-      }
+    if (mode === "inline") {
+      CitationManager.insertInlineGroup(editor, selected, style);
+    } else if (mode === "intext") {
+      CitationManager.insertInTextGroup(editor, selected, style);
+    } else {
+      CitationManager.insertEndnoteGroup(editor, selected, style);
     }
 
     new obsidian.Notice(this.t("notice.insertedCitations", { count: items.length }));
   }
 
   // ── Shared helper ─────────────────────────────────────────────────────────
+  ensureInstalledStyle(): boolean {
+    const styles = syncInstalledStyles(this.api);
+    const styleId = this.settings.cslStyle;
+    if (!styleId) {
+      new obsidian.Notice(this.t("notice.selectInstalledStyle"), 7000);
+      return false;
+    }
+    if (!styles.some((style) => style.id === styleId)) {
+      this.settings.cslStyle = "";
+      void this.saveSettings();
+      new obsidian.Notice(this.t("notice.styleRemoved", { style: styleId }), 8000);
+      return false;
+    }
+    if (!CslEngine.canFormat(styleId)) {
+      new obsidian.Notice(this.t("notice.styleFormatFailed", { error: styleId }), 8000);
+      return false;
+    }
+    return true;
+  }
+
   async resolveItems(keys: string[]): Promise<Map<string, ZoteroItem> | null> {
     const map = new Map<string, ZoteroItem>();
     const missing: string[] = [];

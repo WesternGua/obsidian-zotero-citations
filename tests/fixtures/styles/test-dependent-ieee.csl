@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0" default-locale="en-GB">
+  <info>
+    <title>Test dependent IEEE (English UK)</title>
+    <id>http://www.zotero.org/styles/test-dependent-ieee</id>
+    <link href="http://www.zotero.org/styles/ieee" rel="independent-parent"/>
+    <updated>2026-08-23T00:00:00+00:00</updated>
+  </info>
+</style>

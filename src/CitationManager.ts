@@ -2,7 +2,8 @@
  * CitationManager.ts – Static-methods-only class for parsing, building,
  * inserting, refreshing, and formatting Zotero citations in Obsidian.
  */
-import { ZoteroItem, ZoteroCreator } from "./ZoteroAPI";
+import { ZoteroItem } from "./ZoteroAPI";
+import { CslEngine } from "./CslEngine";
 
 // ── Editor interface (subset of Obsidian's Editor) ────────────────────────
 export interface EditorPosition {
@@ -26,6 +27,7 @@ export interface InlineCitation {
   key: string;
   page: string;
   formattedText: string;
+  entries: CitationEntry[];
   index: number;
 }
 
@@ -34,6 +36,7 @@ export interface EndnoteDef {
   key: string;
   page: string;
   formattedText: string;
+  entries: CitationEntry[];
   fullMatch: string;
   defIndex: number;
 }
@@ -43,6 +46,7 @@ export interface EndnoteRef {
   key: string;
   page: string;
   formattedText: string;
+  entries: CitationEntry[];
   fullMatch: string;
   index: number;
 }
@@ -51,6 +55,7 @@ export interface InTextCitation {
   key: string;
   page: string;
   formattedText: string;
+  entries: CitationEntry[];
   fullMatch: string;
   index: number;
 }
@@ -60,13 +65,31 @@ export interface CitationRef {
   page: string;
 }
 
+export interface CitationEntry {
+  key: string;
+  page: string;
+  formattedText: string;
+}
+
+export interface CitationInsertEntry {
+  item: ZoteroItem;
+  page?: string;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────
 const KEY_PAT = "[A-Za-z0-9_:.-]+";
-
-const ENDNOTE_DEF_RE_SRC = `^\\[\\^(\\d+)\\]: <!-- zotero:(${KEY_PAT}):([^ ]*) --> (.+)$`;
+const INLINE_RE_SRC = `\\^\\[<!-- zotero:(${KEY_PAT}):([^ ]*) --> ([\\s\\S]*?)\\]`;
+const ENDNOTE_DEF_RE_SRC = `^\\[\\^([^\\]\\n]+)\\]:\\s*(<!-- zotero:${KEY_PAT}:[^ ]*\\s*--> .+)$`;
 const IN_TEXT_LEGACY_RE_SRC = `<!-- zotero-inline:(${KEY_PAT}):([^ ]*) -->\\s*([\\s\\S]*?)\\s*<!-- \\/zotero-inline -->`;
 const BIBLIOGRAPHY_START = "<!-- zotero-bibliography-start -->";
 const BIBLIOGRAPHY_END = "<!-- zotero-bibliography-end -->";
+
+export class EngineUnavailableError extends Error {
+  constructor(public readonly styleId: string) {
+    super(`The CSL engine could not format style: ${styleId}`);
+    this.name = "EngineUnavailableError";
+  }
+}
 
 // ── Main class ────────────────────────────────────────────────────────────
 export class CitationManager {
@@ -105,11 +128,15 @@ export class CitationManager {
         pos++;
       }
       if (pos >= content.length) break;
+      const bodyWithMetadata = `<!-- zotero:${key}:${m[2]} --> ${content.slice(bodyStart, pos)}`;
+      const entries = CitationManager.parseZoteroEntries(bodyWithMetadata, "zotero");
+      const formattedText = CitationManager.stripCitationMetadata(content.slice(bodyStart, pos));
       results.push({
         fullMatch: content.slice(index, pos + 1),
         key,
         page,
-        formattedText: content.slice(bodyStart, pos),
+        formattedText,
+        entries: entries.length ? entries : [{ key, page, formattedText }],
         index,
       });
       startRe.lastIndex = pos + 1;
@@ -122,11 +149,14 @@ export class CitationManager {
     const re = new RegExp(ENDNOTE_DEF_RE_SRC, "gm");
     let m: RegExpExecArray | null;
     while ((m = re.exec(content)) !== null) {
+      const entries = CitationManager.parseZoteroEntries(m[2], "zotero");
+      if (!entries.length) continue;
       results.push({
         label: m[1],
-        key: m[2],
-        page: decodeURIComponent(m[3]),
-        formattedText: m[4],
+        key: entries[0].key,
+        page: entries[0].page,
+        formattedText: CitationManager.stripCitationMetadata(m[2]),
+        entries,
         fullMatch: m[0],
         defIndex: m.index,
       });
@@ -138,21 +168,27 @@ export class CitationManager {
     const seen = new Set<string>();
     const out: CitationRef[] = [];
     for (const c of CitationManager.parseInlineCitations(content)) {
-      if (!seen.has(c.key)) {
-        seen.add(c.key);
-        out.push({ key: c.key, page: c.page });
+      for (const entry of c.entries.length ? c.entries : [{ key: c.key, page: c.page, formattedText: c.formattedText }]) {
+        if (!seen.has(entry.key)) {
+          seen.add(entry.key);
+          out.push({ key: entry.key, page: entry.page });
+        }
       }
     }
     for (const c of CitationManager.parseEndnoteRefs(content)) {
-      if (!seen.has(c.key)) {
-        seen.add(c.key);
-        out.push({ key: c.key, page: c.page });
+      for (const entry of c.entries.length ? c.entries : [{ key: c.key, page: c.page, formattedText: c.formattedText }]) {
+        if (!seen.has(entry.key)) {
+          seen.add(entry.key);
+          out.push({ key: entry.key, page: entry.page });
+        }
       }
     }
     for (const c of CitationManager.parseInTextCitations(content)) {
-      if (!seen.has(c.key)) {
-        seen.add(c.key);
-        out.push({ key: c.key, page: c.page });
+      for (const entry of c.entries.length ? c.entries : [{ key: c.key, page: c.page, formattedText: c.formattedText }]) {
+        if (!seen.has(entry.key)) {
+          seen.add(entry.key);
+          out.push({ key: entry.key, page: entry.page });
+        }
       }
     }
     return out;
@@ -168,7 +204,6 @@ export class CitationManager {
 
   static parseInTextCitations(content: string): InTextCitation[] {
     const results: InTextCitation[] = [];
-
     const startRe = new RegExp(`\\^\\[<!-- zotero-intext:(${KEY_PAT}):([^ ]*) --> `, "g");
     let m: RegExpExecArray | null;
     while ((m = startRe.exec(content)) !== null) {
@@ -198,10 +233,14 @@ export class CitationManager {
         pos++;
       }
       if (pos >= content.length) break;
+      const bodyWithMetadata = `<!-- zotero-intext:${key}:${m[2]} --> ${content.slice(bodyStart, pos)}`;
+      const entries = CitationManager.parseZoteroEntries(bodyWithMetadata, "zotero-intext");
+      const formattedText = CitationManager.stripCitationMetadata(content.slice(bodyStart, pos));
       results.push({
         key,
         page,
-        formattedText: content.slice(bodyStart, pos),
+        formattedText,
+        entries: entries.length ? entries : [{ key, page, formattedText }],
         fullMatch: content.slice(index, pos + 1),
         index,
       });
@@ -214,6 +253,7 @@ export class CitationManager {
         key: m[1],
         page: decodeURIComponent(m[2]),
         formattedText: m[3],
+        entries: [{ key: m[1], page: decodeURIComponent(m[2]), formattedText: m[3] }],
         fullMatch: m[0],
         index: m.index,
       });
@@ -239,6 +279,7 @@ export class CitationManager {
         key: def.key,
         page: def.page,
         formattedText: def.formattedText,
+        entries: def.entries,
         fullMatch: m[0],
         index: m.index,
       });
@@ -261,7 +302,7 @@ export class CitationManager {
     let m: RegExpExecArray | null;
     while ((m = re.exec(content)) !== null) {
       if (content[m.index + m[0].length] === ":") continue;
-      if (pos >= m.index && pos <= m.index + m[0].length) return defs.get(m[1]) ?? null;
+      if (pos > m.index && pos < m.index + m[0].length) return defs.get(m[1]) ?? null;
     }
     return null;
   }
@@ -273,23 +314,117 @@ export class CitationManager {
     return null;
   }
 
+  static parseZoteroEntries(text: string, marker: "zotero" | "zotero-intext" = "zotero"): CitationEntry[] {
+    const results: CitationEntry[] = [];
+    const re = new RegExp(`<!--\\s*${marker}:(${KEY_PAT}):([^ ]*)\\s*-->\\s*`, "g");
+    const matches: { index: number; end: number; key: string; page: string }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      matches.push({
+        index: m.index,
+        end: re.lastIndex,
+        key: m[1],
+        page: decodeURIComponent(m[2] || ""),
+      });
+    }
+
+    for (let i = 0; i < matches.length; i++) {
+      const cur = matches[i];
+      const next = matches[i + 1];
+      let formattedText = text.slice(cur.end, next ? next.index : text.length).trim();
+      // The plugin joins grouped citations with "; ". Keep the delimiter out of
+      // the managed citation body so refresh/reformat can rebuild a clean group.
+      if (next && formattedText.endsWith(";")) formattedText = formattedText.slice(0, -1).trimEnd();
+      results.push({ key: cur.key, page: cur.page, formattedText });
+    }
+    return results;
+  }
+
+  private static buildCitationGroup(entries: CitationInsertEntry[], style: string, marker: "zotero" | "zotero-intext"): string {
+    const metadata = entries
+      .map((entry) => `<!-- ${marker}:${entry.item.key}:${encodeURIComponent(entry.page ?? "")} -->`)
+      .join(" ");
+    const text = marker === "zotero-intext"
+      ? CslEngine.formatCitationCluster(entries, style)
+      : CslEngine.formatNoteCluster(entries, style);
+    if (text == null) throw new EngineUnavailableError(style);
+    return `${metadata} ${text}`;
+  }
+
+  private static refreshCitationEntries(
+    entries: CitationEntry[],
+    itemMap: Map<string, ZoteroItem>,
+    style: string,
+    marker: "zotero" | "zotero-intext",
+  ): { text: string; count: number } {
+    const resolved = entries.map((entry) => ({ entry, item: itemMap.get(entry.key) }));
+    const available = resolved.filter((value): value is { entry: CitationEntry; item: ZoteroItem } => !!value.item);
+    if (available.length !== entries.length) {
+      const metadata = entries
+        .map((entry) => `<!-- ${marker}:${entry.key}:${encodeURIComponent(entry.page ?? "")} -->`)
+        .join(" ");
+      const oldText = entries.map((entry) => entry.formattedText).filter(Boolean).join("; ");
+      return { text: `${metadata} ${oldText}`.trim(), count: 0 };
+    }
+    const text = CitationManager.buildCitationGroup(
+      available.map(({ entry, item }) => ({ item, page: entry.page || undefined })),
+      style,
+      marker,
+    );
+    return { text, count: available.length };
+  }
+
+  private static stripCitationMetadata(text: string): string {
+    return text
+      .replace(new RegExp(`<!--\\s*(?:zotero|zotero-intext):${KEY_PAT}:[^ ]*\\s*-->\\s*`, "g"), "")
+      .trim();
+  }
+
+  private static nextNumericEndnoteLabel(content: string): string {
+    let max = 0;
+    const re = /\[\^(\d+)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) max = Math.max(max, parseInt(m[1]));
+    return String(max + 1);
+  }
+
+  private static appendEndnoteDef(editor: MinimalEditor, contentAfterRefInsert: string, def: string): void {
+    const bibStart = contentAfterRefInsert.indexOf(BIBLIOGRAPHY_START);
+    if (bibStart !== -1) {
+      let ins = bibStart;
+      while (ins > 0 && contentAfterRefInsert[ins - 1] === "\n") ins--;
+      editor.replaceRange("\n\n" + def, editor.offsetToPos(ins), editor.offsetToPos(ins));
+    } else {
+      editor.replaceRange("\n\n" + def, editor.offsetToPos(contentAfterRefInsert.length));
+    }
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // BUILDING
   // ════════════════════════════════════════════════════════════════════════
 
   static buildInlineFootnote(item: ZoteroItem, style: string, page?: string): string {
-    const text = CitationManager.formatCitation(item, style, page);
-    return `^[<!-- zotero:${item.key}:${encodeURIComponent(page ?? "")} --> ${text}]`;
+    return CitationManager.buildInlineFootnoteGroup([{ item, page }], style);
+  }
+
+  static buildInlineFootnoteGroup(entries: CitationInsertEntry[], style: string): string {
+    return `^[${CitationManager.buildCitationGroup(entries, style, "zotero")}]`;
   }
 
   static buildEndnoteDef(label: string, item: ZoteroItem, style: string, page?: string): string {
-    const text = CitationManager.formatCitation(item, style, page);
-    return `[^${label}]: <!-- zotero:${item.key}:${encodeURIComponent(page ?? "")} --> ${text}`;
+    return CitationManager.buildEndnoteDefGroup(label, [{ item, page }], style);
+  }
+
+  static buildEndnoteDefGroup(label: string, entries: CitationInsertEntry[], style: string): string {
+    return `[^${label}]: ${CitationManager.buildCitationGroup(entries, style, "zotero")}`;
   }
 
   static buildInTextCitation(item: ZoteroItem, style: string, page?: string): string {
-    const text = CitationManager.formatCitation(item, style, page);
-    return `^[<!-- zotero-intext:${item.key}:${encodeURIComponent(page ?? "")} --> ${text}]`;
+    return CitationManager.buildInTextCitationGroup([{ item, page }], style);
+  }
+
+  static buildInTextCitationGroup(entries: CitationInsertEntry[], style: string): string {
+    return `^[${CitationManager.buildCitationGroup(entries, style, "zotero-intext")}]`;
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -300,49 +435,71 @@ export class CitationManager {
     editor.replaceSelection(CitationManager.buildInlineFootnote(item, style, page));
   }
 
+  static insertInlineGroup(editor: MinimalEditor, entries: CitationInsertEntry[], style: string): void {
+    editor.replaceSelection(CitationManager.buildInlineFootnoteGroup(entries, style));
+  }
+
   static insertEndnote(editor: MinimalEditor, item: ZoteroItem, style: string, page?: string): void {
+    CitationManager.insertEndnoteGroup(editor, [{ item, page }], style);
+  }
+
+  static insertEndnoteGroup(editor: MinimalEditor, entries: CitationInsertEntry[], style: string): void {
     const content = editor.getValue();
-    let max = 0;
-    const re = /\[\^(\d+)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) max = Math.max(max, parseInt(m[1]));
-    const label = String(max + 1);
+    const existing = CitationManager.parseEndnoteDefs(content).find((def) =>
+      def.entries.length === entries.length && def.entries.every((entry, index) =>
+        entry.key === entries[index].item.key && entry.page === (entries[index].page ?? "")
+      )
+    );
+    if (existing) {
+      editor.replaceSelection(`[^${existing.label}]`);
+      return;
+    }
+    const label = CitationManager.nextNumericEndnoteLabel(content);
+    const def = CitationManager.buildEndnoteDefGroup(label, entries, style);
     editor.replaceSelection(`[^${label}]`);
     const updated = editor.getValue();
-    const def = CitationManager.buildEndnoteDef(label, item, style, page);
-    const bibStart = updated.indexOf(BIBLIOGRAPHY_START);
-    if (bibStart !== -1) {
-      let ins = bibStart;
-      while (ins > 0 && updated[ins - 1] === "\n") ins--;
-      editor.replaceRange("\n\n" + def, editor.offsetToPos(ins), editor.offsetToPos(ins));
-    } else {
-      editor.replaceRange("\n\n" + def, editor.offsetToPos(updated.length));
-    }
+    CitationManager.appendEndnoteDef(editor, updated, def);
   }
 
   static insertInText(editor: MinimalEditor, item: ZoteroItem, style: string, page?: string): void {
     editor.replaceSelection(CitationManager.buildInTextCitation(item, style, page));
   }
 
+  static insertInTextGroup(editor: MinimalEditor, entries: CitationInsertEntry[], style: string): void {
+    editor.replaceSelection(CitationManager.buildInTextCitationGroup(entries, style));
+  }
+
   static replaceInline(editor: MinimalEditor, existing: InlineCitation, item: ZoteroItem, style: string, page?: string): void {
+    CitationManager.replaceInlineGroup(editor, existing, [{ item, page }], style);
+  }
+
+  static replaceInlineGroup(editor: MinimalEditor, existing: InlineCitation, entries: CitationInsertEntry[], style: string): void {
     editor.replaceRange(
-      CitationManager.buildInlineFootnote(item, style, page),
+      CitationManager.buildInlineFootnoteGroup(entries, style),
       editor.offsetToPos(existing.index),
       editor.offsetToPos(existing.index + existing.fullMatch.length)
     );
   }
 
   static replaceEndnoteDef(editor: MinimalEditor, existing: EndnoteDef, item: ZoteroItem, style: string, page?: string): void {
+    CitationManager.replaceEndnoteDefGroup(editor, existing, [{ item, page }], style);
+  }
+
+  static replaceEndnoteDefGroup(editor: MinimalEditor, existing: EndnoteDef, entries: CitationInsertEntry[], style: string): void {
     editor.replaceRange(
-      CitationManager.buildEndnoteDef(existing.label, item, style, page),
+      CitationManager.buildEndnoteDefGroup(existing.label, entries, style),
       editor.offsetToPos(existing.defIndex),
       editor.offsetToPos(existing.defIndex + existing.fullMatch.length)
     );
   }
 
   static replaceInText(editor: MinimalEditor, existing: InTextCitation, item: ZoteroItem, style: string, page?: string): void {
+    CitationManager.replaceInTextGroup(editor, existing, [{ item, page }], style);
+  }
+
+  static replaceInTextGroup(editor: MinimalEditor, existing: InTextCitation, entries: CitationInsertEntry[], style: string): void {
     editor.replaceRange(
-      CitationManager.buildInTextCitation(item, style, page),
+      CitationManager.buildInTextCitationGroup(entries, style),
       editor.offsetToPos(existing.index),
       editor.offsetToPos(existing.index + existing.fullMatch.length)
     );
@@ -358,10 +515,10 @@ export class CitationManager {
     let count = 0;
     for (let i = citations.length - 1; i >= 0; i--) {
       const c = citations[i];
-      const item = itemMap.get(c.key);
-      if (!item) continue;
-      content = content.slice(0, c.index) + CitationManager.buildInlineFootnote(item, style, c.page || undefined) + content.slice(c.index + c.fullMatch.length);
-      count++;
+      const refreshed = CitationManager.refreshCitationEntries(c.entries, itemMap, style, "zotero");
+      if (!refreshed.count) continue;
+      content = content.slice(0, c.index) + `^[${refreshed.text}]` + content.slice(c.index + c.fullMatch.length);
+      count += refreshed.count;
     }
     editor.setValue(content);
     return count;
@@ -373,10 +530,10 @@ export class CitationManager {
     let count = 0;
     for (let i = defs.length - 1; i >= 0; i--) {
       const d = defs[i];
-      const item = itemMap.get(d.key);
-      if (!item) continue;
-      content = content.slice(0, d.defIndex) + CitationManager.buildEndnoteDef(d.label, item, style, d.page || undefined) + content.slice(d.defIndex + d.fullMatch.length);
-      count++;
+      const refreshed = CitationManager.refreshCitationEntries(d.entries, itemMap, style, "zotero");
+      if (!refreshed.count) continue;
+      content = content.slice(0, d.defIndex) + `[^${d.label}]: ${refreshed.text}` + content.slice(d.defIndex + d.fullMatch.length);
+      count += refreshed.count;
     }
     editor.setValue(content);
     return count;
@@ -388,10 +545,10 @@ export class CitationManager {
     let count = 0;
     for (let i = citations.length - 1; i >= 0; i--) {
       const c = citations[i];
-      const item = itemMap.get(c.key);
-      if (!item) continue;
-      content = content.slice(0, c.index) + CitationManager.buildInTextCitation(item, style, c.page || undefined) + content.slice(c.index + c.fullMatch.length);
-      count++;
+      const refreshed = CitationManager.refreshCitationEntries(c.entries, itemMap, style, "zotero-intext");
+      if (!refreshed.count) continue;
+      content = content.slice(0, c.index) + `^[${refreshed.text}]` + content.slice(c.index + c.fullMatch.length);
+      count += refreshed.count;
     }
     editor.setValue(content);
     return count;
@@ -588,7 +745,7 @@ export class CitationManager {
     const newContent = editor.getValue();
     if (newContent.includes(BIBLIOGRAPHY_START)) {
       const bib = CitationManager.generateBibliography(newContent, itemMap, style);
-      CitationManager.insertOrReplaceBibliography(editor, bib);
+      if (bib) CitationManager.insertOrReplaceBibliography(editor, bib);
     }
     return count;
   }
@@ -601,15 +758,19 @@ export class CitationManager {
     const all = CitationManager.parseAllCitations(content);
     const seen = new Set<string>();
     const items: ZoteroItem[] = [];
+    let missingItem = false;
     for (const c of all) {
       if (!seen.has(c.key)) {
         seen.add(c.key);
         const it = itemMap.get(c.key);
         if (it) items.push(it);
+        else missingItem = true;
       }
     }
-    if (!items.length) return "";
-    const entries = items.map((it, i) => CitationManager.formatBibEntry(it, style, i + 1));
+    if (!items.length || missingItem) return "";
+    const formatted = CslEngine.formatBibliographyOrdered(items, style);
+    if (!formatted || formatted.length !== items.length) throw new EngineUnavailableError(style);
+    const entries = formatted.map((entry) => entry.text);
     const title = heading || "References";
     const quotedEntries = entries.map((e) => "> " + e).join("\n>\n");
     return BIBLIOGRAPHY_START + "\n\n# " + title + "\n\n" + quotedEntries + "\n\n" + BIBLIOGRAPHY_END;
@@ -668,283 +829,29 @@ export class CitationManager {
   // FORMATTERS
   // ════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Format one footnote/endnote citation using the real CSL engine.
+   * Numeric styles use a bibliography entry without its numeric label because
+   * Obsidian already renders the footnote/endnote number.
+   * Throws EngineUnavailableError when the selected style cannot be driven by
+   * citeproc, so callers can surface a clear message and abort without writing
+   * anything into the document. There is no hand-written fallback by design.
+   */
   static formatCitation(item: ZoteroItem, style: string, page?: string): string {
-    switch (style) {
-      case "chicago-note-bibliography":
-        return CitationManager.fmtChicagoNote(item, page);
-      case "chicago-author-date":
-        return CitationManager.fmtChicagoAD(item, page);
-      case "apa":
-        return CitationManager.fmtAPA(item, page);
-      case "modern-language-association":
-        return CitationManager.fmtMLA(item, page);
-      case "vancouver":
-        return CitationManager.fmtVancouver(item, page);
-      case "gb-t-7714-2015-numeric":
-      case "gb-t-7714-2015-author-date":
-        return CitationManager.fmtGBT(item, page);
-      case "oscola":
-        return CitationManager.fmtOSCOLA(item, page);
-      case "harvard-cite-them-right":
-        return CitationManager.fmtHarvard(item, page);
-      case "ieee":
-        return CitationManager.fmtIEEE(item, page);
-      default:
-        return CitationManager.fmtChicagoNote(item, page);
-    }
+    const engineText = CslEngine.formatNoteText(item, style, page);
+    if (engineText != null) return engineText;
+    throw new EngineUnavailableError(style);
   }
 
-  static formatBibEntry(item: ZoteroItem, style: string, idx: number): string {
-    switch (style) {
-      case "chicago-note-bibliography":
-      case "chicago-author-date":
-        return CitationManager.bibChicago(item);
-      case "apa":
-      case "harvard-cite-them-right":
-        return CitationManager.bibAPA(item);
-      case "modern-language-association":
-        return CitationManager.bibMLA(item);
-      case "vancouver":
-        return `${idx}. ${CitationManager.bibVancouver(item)}`;
-      case "gb-t-7714-2015-numeric":
-        return `[${idx}] ${CitationManager.bibGBT(item)}`;
-      case "gb-t-7714-2015-author-date":
-        return CitationManager.bibGBT(item);
-      case "oscola":
-        return CitationManager.bibOSCOLA(item);
-      case "ieee":
-        return `[${idx}] ${CitationManager.bibIEEE(item)}`;
-      default:
-        return CitationManager.bibChicago(item);
-    }
+  /** Format a citation that remains in the document's running text. */
+  static formatInTextCitation(item: ZoteroItem, style: string, page?: string): string {
+    const engineText = CslEngine.formatCitationText(item, style, page);
+    if (engineText != null) return engineText;
+    throw new EngineUnavailableError(style);
   }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
 
   static getYear(item: ZoteroItem): string {
     if (!item.date) return "n.d.";
     return item.date.match(/\b(\d{4})\b/)?.[1] ?? item.date;
-  }
-
-  static getAuthors(item: ZoteroItem, type: string = "author"): ZoteroCreator[] {
-    return item.creators.filter((c) => c.creatorType === type);
-  }
-
-  static nameNormal(c: ZoteroCreator): string {
-    if (c.name) return c.name;
-    return [c.firstName, c.lastName].filter(Boolean).join(" ");
-  }
-
-  static nameInverted(c: ZoteroCreator): string {
-    if (c.name) return c.name;
-    const f = c.firstName ?? "";
-    const l = c.lastName ?? "";
-    return l ? `${l}${f ? ", " + f : ""}` : f;
-  }
-
-  static authorStr(item: ZoteroItem, max: number = 3, inverted: boolean = false): string {
-    const a = CitationManager.getAuthors(item);
-    if (!a.length) return "Anonymous";
-    const names = a.map((x, i) => i === 0 && inverted ? CitationManager.nameInverted(x) : CitationManager.nameNormal(x));
-    if (names.length > max) return names[0] + " et al.";
-    if (names.length === 1) return names[0];
-    return names.slice(0, -1).join(", ") + ", and " + names[names.length - 1];
-  }
-
-  static initials(item: ZoteroItem, max: number = 6): string {
-    const a = CitationManager.getAuthors(item);
-    if (!a.length) return "Anon";
-    const names = a.map((x) => {
-      if (x.name) return x.name;
-      const inits = (x.firstName ?? "").split(/\s+/).filter(Boolean).map((n) => n[0] + ".").join(" ");
-      return (x.lastName ?? "") + (inits ? " " + inits : "");
-    });
-    return names.length > max ? names.slice(0, max).join(", ") + " et al." : names.join(", ");
-  }
-
-  static it(s: string): string {
-    return `*${s}*`;
-  }
-
-  // ── Chicago Notes-Bibliography ─────────────────────────────────────────────
-
-  static fmtChicagoNote(item: ZoteroItem, page?: string): string {
-    const a = CitationManager.authorStr(item);
-    const y = CitationManager.getYear(item);
-    const p = page ? `, ${page}` : "";
-    switch (item.itemType) {
-      case "legal_case": {
-        const court = item.court ?? item.authority;
-        return `${CitationManager.it(item.title)} [${y}]${court ? " " + court : ""}${item.docketNumber ? " " + item.docketNumber : ""}${p}.`;
-      }
-      case "book":
-        return `${a}, ${CitationManager.it(item.title)} (${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}, ${y})${p}.`;
-      case "bookSection": {
-        const eds = CitationManager.getAuthors(item, "editor").map((e) => CitationManager.nameNormal(e)).join(", ");
-        return `${a}, "${item.title}," in ${CitationManager.it(item.bookTitle ?? "Unknown")}${eds ? ", ed. " + eds : ""} (${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}, ${y})${p}.`;
-      }
-      case "journalArticle":
-        return `${a}, "${item.title}," ${CitationManager.it(item.publicationTitle ?? "Journal")}${item.volume ? " " + item.volume : ""}${item.issue ? ", no. " + item.issue : ""} (${y})${item.pages ? ": " + item.pages : ""}${p}.`;
-      case "thesis":
-        return `${a}, "${item.title}" (${item.thesisType ?? "PhD diss."}, ${item.university ?? "n.p."}, ${y})${p}.`;
-      default:
-        return `${a}, "${item.title}" (${y})${p}.`;
-    }
-  }
-
-  static bibChicago(item: ZoteroItem): string {
-    const a = CitationManager.authorStr(item, 3, true);
-    const y = CitationManager.getYear(item);
-    switch (item.itemType) {
-      case "legal_case": {
-        const court = item.court ?? item.authority;
-        return `${CitationManager.it(item.title)}. ${court ? court + ". " : ""}${item.docketNumber ? item.docketNumber + ". " : ""}${y}.`;
-      }
-      case "book":
-        return `${a}. ${CitationManager.it(item.title)}. ${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}, ${y}.`;
-      case "bookSection": {
-        const eds = CitationManager.getAuthors(item, "editor").map((e) => CitationManager.nameNormal(e)).join(", ");
-        return `${a}. "${item.title}." In ${CitationManager.it(item.bookTitle ?? "Unknown")}${eds ? ", edited by " + eds : ""}. ${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}, ${y}.`;
-      }
-      case "journalArticle":
-        return `${a}. "${item.title}." ${CitationManager.it(item.publicationTitle ?? "Journal")}${item.volume ? " " + item.volume : ""}${item.issue ? ", no. " + item.issue : ""} (${y})${item.pages ? ": " + item.pages : ""}.${item.DOI ? " https://doi.org/" + item.DOI : ""}`;
-      case "thesis":
-        return `${a}. "${item.title}." ${item.thesisType ?? "PhD diss."}, ${item.university ?? "n.p."}, ${y}.`;
-      default:
-        return `${a}. "${item.title}." ${y}.`;
-    }
-  }
-
-  static fmtChicagoAD(item: ZoteroItem, page?: string): string {
-    const l = CitationManager.getAuthors(item)[0]?.lastName ?? "Anonymous";
-    return `(${l} ${CitationManager.getYear(item)}${page ? ", " + page : ""})`;
-  }
-
-  static fmtAPA(item: ZoteroItem, page?: string): string {
-    const a = CitationManager.getAuthors(item);
-    const str = a.length <= 2
-      ? a.map((x) => x.lastName ?? "").filter(Boolean).join(" & ")
-      : (a[0]?.lastName ?? "") + " et al.";
-    return `(${str || "Anonymous"}, ${CitationManager.getYear(item)}${page ? ", p. " + page : ""})`;
-  }
-
-  static bibAPA(item: ZoteroItem): string {
-    const a = CitationManager.getAuthors(item).map((x) => {
-      if (x.name) return x.name;
-      const ini = (x.firstName ?? "").split(/\s+/).filter(Boolean).map((n) => n[0] + ".").join(" ");
-      return `${x.lastName ?? ""}${ini ? ", " + ini : ""}`;
-    }).join(", ") || "Anonymous";
-    const y = CitationManager.getYear(item);
-    switch (item.itemType) {
-      case "book":
-        return `${a}. (${y}). ${CitationManager.it(item.title)}${item.edition ? ` (${item.edition} ed.)` : ""}. ${item.publisher ?? "n.p."}.`;
-      case "journalArticle":
-        return `${a}. (${y}). ${item.title}. ${CitationManager.it(item.publicationTitle ?? "Journal")}${item.volume ? `, ${CitationManager.it(item.volume)}` : ""}${item.issue ? `(${item.issue})` : ""}${item.pages ? `, ${item.pages}` : ""}.${item.DOI ? ` https://doi.org/${item.DOI}` : ""}`;
-      default:
-        return `${a}. (${y}). ${item.title}.`;
-    }
-  }
-
-  static fmtMLA(item: ZoteroItem, page?: string): string {
-    return `(${CitationManager.getAuthors(item)[0]?.lastName ?? "Anonymous"}${page ? " " + page : ""})`;
-  }
-
-  static bibMLA(item: ZoteroItem): string {
-    const a = CitationManager.getAuthors(item);
-    const as = !a.length
-      ? "Anonymous."
-      : a.length === 1
-        ? CitationManager.nameInverted(a[0]) + "."
-        : a.length === 2
-          ? `${CitationManager.nameInverted(a[0])}, and ${CitationManager.nameNormal(a[1])}.`
-          : CitationManager.nameInverted(a[0]) + ", et al.";
-    const y = CitationManager.getYear(item);
-    switch (item.itemType) {
-      case "book":
-        return `${as} ${CitationManager.it(item.title)}. ${item.publisher ?? "n.p."}, ${y}.`;
-      case "journalArticle":
-        return `${as} "${item.title}." ${CitationManager.it(item.publicationTitle ?? "Journal")}${item.volume ? `, vol. ${item.volume}` : ""}${item.issue ? `, no. ${item.issue}` : ""}, ${y}${item.pages ? `, pp. ${item.pages}` : ""}.`;
-      default:
-        return `${as} ${CitationManager.it(item.title)}. ${y}.`;
-    }
-  }
-
-  static fmtVancouver(item: ZoteroItem, page?: string): string {
-    return `${CitationManager.getAuthors(item)[0]?.lastName ?? "Anon"} ${CitationManager.getYear(item)}${page ? ":" + page : ""}`;
-  }
-
-  static bibVancouver(item: ZoteroItem): string {
-    const a = CitationManager.initials(item);
-    const y = CitationManager.getYear(item);
-    switch (item.itemType) {
-      case "journalArticle":
-        return `${a}. ${item.title}. ${item.publicationTitle ?? "Journal"}. ${y};${item.volume ?? ""}${item.issue ? `(${item.issue})` : ""}${item.pages ? `:${item.pages}` : ""}.`;
-      case "book":
-        return `${a}. ${item.title}. ${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}; ${y}.`;
-      default:
-        return `${a}. ${item.title}. ${y}.`;
-    }
-  }
-
-  static fmtGBT(item: ZoteroItem, page?: string): string {
-    return `${CitationManager.getAuthors(item)[0]?.lastName ?? ""}${CitationManager.getYear(item)}${page ? ": " + page : ""}`;
-  }
-
-  static bibGBT(item: ZoteroItem): string {
-    const a = CitationManager.getAuthors(item).slice(0, 3).map((x) => {
-      return (x.lastName ?? "") + (x.firstName ? " " + x.firstName : "");
-    }).join(", ") + (CitationManager.getAuthors(item).length > 3 ? ", \u7B49" : "") || "\u4F5A\u540D";
-    const y = CitationManager.getYear(item);
-    const dt: Record<string, string> = { book: "M", journalArticle: "J", bookSection: "M", conferencePaper: "C", thesis: "D", report: "R", webpage: "EB/OL" };
-    const d = dt[item.itemType] ?? "Z";
-    switch (item.itemType) {
-      case "book":
-        return `${a}. ${item.title}[${d}]. ${[item.place, item.publisher].filter(Boolean).join(": ") || "\u51FA\u7248\u5730\u4E0D\u8BE6: \u51FA\u7248\u8005\u4E0D\u8BE6"}, ${y}.`;
-      case "journalArticle":
-        return `${a}. ${item.title}[${d}]. ${item.publicationTitle ?? "\u671F\u520A"}${item.volume ? `, ${item.volume}` : ""}${item.issue ? `(${item.issue})` : ""}, ${y}${item.pages ? `: ${item.pages}` : ""}.`;
-      case "thesis":
-        return `${a}. ${item.title}[${d}]. ${item.university ?? "\u5B66\u6821\u4E0D\u8BE6"}, ${y}.`;
-      default:
-        return `${a}. ${item.title}[${d}]. ${y}.`;
-    }
-  }
-
-  static fmtOSCOLA(item: ZoteroItem, page?: string): string {
-    const a = CitationManager.authorStr(item);
-    const y = CitationManager.getYear(item);
-    const p = page ? " " + page : "";
-    switch (item.itemType) {
-      case "book":
-        return `${a}, ${CitationManager.it(item.title)} (${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}, ${y})${p}`;
-      case "journalArticle":
-        return `${a}, '${item.title}' (${y}) ${item.volume ?? ""} ${item.publicationTitle ?? ""}${item.pages ? " " + item.pages : ""}${p}`;
-      default:
-        return `${a}, ${CitationManager.it(item.title)} (${y})${p}`;
-    }
-  }
-
-  static bibOSCOLA(item: ZoteroItem): string {
-    return CitationManager.fmtOSCOLA(item);
-  }
-
-  static fmtHarvard(item: ZoteroItem, page?: string): string {
-    return `(${CitationManager.getAuthors(item)[0]?.lastName ?? "Anonymous"}, ${CitationManager.getYear(item)}${page ? ", p. " + page : ""})`;
-  }
-
-  static fmtIEEE(item: ZoteroItem, _page?: string): string {
-    return CitationManager.getAuthors(item)[0]?.lastName ?? "Anon";
-  }
-
-  static bibIEEE(item: ZoteroItem): string {
-    const a = CitationManager.initials(item);
-    const y = CitationManager.getYear(item);
-    switch (item.itemType) {
-      case "journalArticle":
-        return `${a}, "${item.title}," ${CitationManager.it(item.publicationTitle ?? "Journal")}${item.volume ? `, vol. ${item.volume}` : ""}${item.issue ? `, no. ${item.issue}` : ""}${item.pages ? `, pp. ${item.pages}` : ""}, ${y}.`;
-      case "book":
-        return `${a}, ${CitationManager.it(item.title)}. ${[item.place, item.publisher].filter(Boolean).join(": ") || "n.p."}, ${y}.`;
-      default:
-        return `${a}, "${item.title}," ${y}.`;
-    }
   }
 }

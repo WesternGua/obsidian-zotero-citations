@@ -1,10 +1,12 @@
-# Zotero Citations v0.2.6
+# Zotero Citations v0.2.7
 
-## Better BibTeX CAYW error reporting
+## Zotero CSL synchronization and endnote fixes
 
-- Fixed silent handling when the Better BibTeX CAYW endpoint fails or returns an invalid response.
-- Insert citation now shows an explicit notice when CAYW returns a non-2xx status, non-JSON body, empty JSON body, or immediate empty response.
-- The notice points users to check whether Better BibTeX is installed and compatible with their Zotero version.
+- Citation styles are now read exclusively from Zotero's installed CSL styles, with no built-in fallback styles or approximate formatter.
+- Fixed IEEE webpage references so access dates, online markers, URLs, locale-specific quotation marks, and punctuation follow Zotero's CSL configuration.
+- Added dependent-style resolution, Zotero locale and article-URL preference synchronization, bibliography sorting, and multi-item citation clusters.
+- Fixed duplicate endnotes and adjacent insertion in endnote mode. Identical item-and-locator citations reuse the existing endnote, while inserting beside a marker no longer overwrites its definition.
+- Styles removed from Zotero are no longer reused from cache, and regression tests now cover Issues #5 and #6.
 
 ---
 

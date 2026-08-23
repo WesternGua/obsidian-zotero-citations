@@ -376,7 +376,7 @@ function parseZoteroMetadata(text: string): { kind: "inline" | "intext" | "none"
       kind: "inline",
       key: inlineMatch[1],
       locator: decodeURIComponent(inlineMatch[2] || ""),
-      markdown: text.slice(inlineMatch[0].length),
+      markdown: stripZoteroMetadataComments(text.slice(inlineMatch[0].length)),
     };
   }
 
@@ -386,11 +386,15 @@ function parseZoteroMetadata(text: string): { kind: "inline" | "intext" | "none"
       kind: "intext",
       key: inTextMatch[1],
       locator: decodeURIComponent(inTextMatch[2] || ""),
-      markdown: text.slice(inTextMatch[0].length),
+      markdown: stripZoteroMetadataComments(text.slice(inTextMatch[0].length)),
     };
   }
 
   return { kind: "none", key: "", locator: "", markdown: text };
+}
+
+function stripZoteroMetadataComments(text: string): string {
+  return text.replace(/<!--\s*zotero(?:-intext)?:[^>]*-->\s*/g, "");
 }
 
 function normalizeTooltipText(text: string): string {
@@ -419,6 +423,7 @@ interface ZoteroPluginLike {
   getCached: (key: string) => ZoteroItem | undefined;
   fetchAndCache: (key: string) => Promise<ZoteroItem | null>;
   fetchAndCacheRemote?: (key: string) => Promise<ZoteroItem | null>;
+  ensureInstalledStyle?: () => boolean;
 }
 
 type AppWithPlugins = App & {
@@ -610,7 +615,14 @@ async function applyLocatorEdit(spec: PopoverSpec, locator: string): Promise<boo
 
   const page = locator || undefined;
   const style = plugin.settings.cslStyle;
-  const replacement = buildReplacement(edit, item, style, page);
+  if (plugin.ensureInstalledStyle && !plugin.ensureInstalledStyle()) return false;
+  let replacement: string;
+  try {
+    replacement = buildReplacement(edit, item, style, page);
+  } catch (error) {
+    new Notice(appT(spec.app, "notice.styleFormatFailed", { error: String(error) }), 7000);
+    return false;
+  }
 
   if (replaceInSourceView(spec.sourceView, edit, replacement)) {
     new Notice(appT(spec.app, "footnote.updated"));

@@ -2,11 +2,12 @@
  * ZoteroAPI.ts – Communication with Zotero via Better BibTeX HTTP API
  * Improvement 2: Added getInstalledStyles() to dynamically read CSL styles from Zotero
  */
-import { Platform, requestUrl } from "obsidian";
+import { requestUrl } from "obsidian";
 import * as nodeHttp from "http";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { locateZoteroStylesDir, readZoteroIncludePaperArticleUrls, readZoteroLocale } from "./ZoteroEnvironment";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 export interface ZoteroItem {
@@ -33,6 +34,14 @@ export interface ZoteroItem {
   court?: string;
   docketNumber?: string;
   extra?: string;
+  accessed?: string;
+  /**
+   * Raw CSL-JSON for this item, exactly as Zotero's standard CSL exporter
+   * returned it. When present, the CSL engine consumes this directly so that
+   * fields the legacy normalizer drops (accessed date, container-title
+   * variants, etc.) are preserved for accurate formatting.
+   */
+  csl?: Record<string, unknown>;
 }
 
 export interface ZoteroCreator {
@@ -153,57 +162,16 @@ export class ZoteroAPI {
   // IMPROVEMENT 2: Dynamic CSL style reading
   // ════════════════════════════════════════════════════════════════════════════
 
-  /**
-   * Locate the Zotero styles directory across platforms.
-   */
   locateZoteroStylesDir(): string | null {
-    const home = os.homedir();
-    const candidates: string[] = [];
+    return locateZoteroStylesDir();
+  }
 
-    if (Platform.isMacOS) {
-      candidates.push(path.join(home, "Zotero", "styles"));
-      candidates.push(path.join(home, "Library", "Application Support", "Zotero", "Profiles"));
-    } else if (Platform.isWin) {
-      const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
-      candidates.push(path.join(appdata, "Zotero", "Zotero", "Profiles"));
-      candidates.push(path.join(home, "Zotero", "styles"));
-    } else {
-      // Linux
-      candidates.push(path.join(home, "Zotero", "styles"));
-      candidates.push(path.join(home, ".zotero", "zotero"));
-    }
+  getZoteroLocale(): string {
+    return readZoteroLocale();
+  }
 
-    // Direct styles folder
-    for (const dir of candidates) {
-      try {
-        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-          // Check if this IS the styles directory
-          const files = fs.readdirSync(dir);
-          if (files.some((f) => f.endsWith(".csl"))) return dir;
-        }
-      } catch {
-        // skip
-      }
-    }
-
-    // Search in Profiles for the styles subfolder
-    for (const dir of candidates) {
-      if (!dir.includes("Profiles")) continue;
-      try {
-        if (!fs.existsSync(dir)) continue;
-        const profiles = fs.readdirSync(dir);
-        for (const profile of profiles) {
-          const stylesDir = path.join(dir, profile, "styles");
-          if (fs.existsSync(stylesDir) && fs.statSync(stylesDir).isDirectory()) {
-            return stylesDir;
-          }
-        }
-      } catch {
-        // skip
-      }
-    }
-
-    return null;
+  getIncludePaperArticleUrls(): boolean {
+    return readZoteroIncludePaperArticleUrls();
   }
 
   /**
@@ -214,7 +182,7 @@ export class ZoteroAPI {
     const stylesDir = this.locateZoteroStylesDir();
     if (!stylesDir) return [];
 
-    const results: InstalledStyle[] = [];
+    const results = new Map<string, InstalledStyle>();
     try {
       const files = fs.readdirSync(stylesDir).filter((f) => f.endsWith(".csl"));
       for (const file of files) {
@@ -231,8 +199,8 @@ export class ZoteroAPI {
             const lastSlash = urlId.lastIndexOf("/");
             if (lastSlash !== -1) id = urlId.slice(lastSlash + 1);
           }
-          const title = titleMatch ? titleMatch[1].trim() : id;
-          results.push({ id, title });
+          const title = titleMatch ? decodeXmlText(titleMatch[1].trim()) : id;
+          if (id) results.set(id, { id, title });
         } catch {
           // skip unreadable files
         }
@@ -242,8 +210,7 @@ export class ZoteroAPI {
     }
 
     // Sort by title
-    results.sort((a, b) => a.title.localeCompare(b.title));
-    return results;
+    return [...results.values()].sort((a, b) => a.title.localeCompare(b.title));
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -483,6 +450,7 @@ ORDER BY i.key, ic.orderIndex;`;
           title: f.title || f.caseName || "",
           creators: g.creators,
           date: f.date || f.dateDecided || undefined,
+          accessed: f.accessDate || undefined,
           publicationTitle: f.publicationTitle || undefined,
           bookTitle: f.bookTitle || undefined,
           publisher: f.publisher || undefined,
@@ -758,6 +726,28 @@ ORDER BY i.key, ic.orderIndex;`;
       if (typeof y === "number" || typeof y === "string") date = String(y);
     }
 
+    // Accessed date (for webpages etc.). Native Zotero uses `accessDate`
+    // (a string); CSL-JSON uses `accessed.date-parts`. Keep both shapes.
+    let accessed: string | undefined;
+    if (record.accessDate) {
+      accessed = toStr(record.accessDate);
+    } else {
+      const acc = isRecord(record.accessed) ? record.accessed : undefined;
+      const accParts = acc?.["date-parts"];
+      const firstAccPart = isUnknownArray(accParts) ? accParts[0] : undefined;
+      if (isUnknownArray(firstAccPart) && firstAccPart.length > 0) {
+        accessed = firstAccPart.map((p) => String(p)).join("-");
+      }
+    }
+
+    // Preserve the raw CSL-JSON when the source looks like CSL (has a `type`
+    // field or CSL-style `issued`/`container-title`). This lets the real CSL
+    // engine format the item faithfully instead of the fallback templates.
+    let csl: Record<string, unknown> | undefined;
+    if (record.type || record.issued || record["container-title"] || record.accessed) {
+      csl = { ...record };
+    }
+
     const publicationTitle = toStr(record.publicationTitle ?? record["container-title"] ?? record.journalAbbreviation) || undefined;
     const authority = toStr(record.authority ?? record.court) || undefined;
 
@@ -767,6 +757,8 @@ ORDER BY i.key, ic.orderIndex;`;
       title,
       creators,
       date,
+      accessed,
+      csl,
       publicationTitle,
       bookTitle: toStr(record.bookTitle ?? record["collection-title"]) || undefined,
       publisher: toStr(record.publisher) || undefined,
@@ -809,6 +801,14 @@ function snippet(text: string, max = 200): string {
   const compact = text.replace(/\s+/g, " ").trim();
   if (!compact) return "(empty response)";
   return compact.length > max ? `${compact.slice(0, max)}…` : compact;
+}
+
+function decodeXmlText(text: string): string {
+  const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  return text
+    .replace(/&([a-z]+);/gi, (match, name: string) => entities[name.toLowerCase()] ?? match)
+    .replace(/&#(\d+);/g, (_match, value: string) => String.fromCodePoint(Number(value)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, value: string) => String.fromCodePoint(parseInt(value, 16)));
 }
 
 function parseJsonArray(input: unknown): unknown[] {

@@ -5,27 +5,22 @@ import { PluginSettingTab, Setting, App, requestUrl, Notice, Plugin } from "obsi
 import * as nodeHttp from "http";
 import { t, getLanguage, type Language, type LanguageSettings } from "./i18n";
 import { CitationManager, type MinimalEditor, type CitationRef } from "./CitationManager";
-import type { InstalledStyle, ZoteroItem } from "./ZoteroAPI";
+import { CslEngine } from "./CslEngine";
+import type { InstalledStyle, ZoteroItem, ZoteroAPI } from "./ZoteroAPI";
 
-// ── Hardcoded fallback CSL styles ──────────────────────────────────────────
-export interface CslStyleEntry {
-  id: string;
-  zh: string;
-  en: string;
+const INSTALLED_STYLE_TITLES = new Map<string, string>();
+
+export function syncInstalledStyles(api: ZoteroAPI): InstalledStyle[] {
+  CslEngine.refreshConfiguration(
+    api.locateZoteroStylesDir(),
+    api.getZoteroLocale(),
+    api.getIncludePaperArticleUrls(),
+  );
+  const styles = api.getInstalledStyles();
+  INSTALLED_STYLE_TITLES.clear();
+  for (const style of styles) INSTALLED_STYLE_TITLES.set(style.id, style.title);
+  return styles;
 }
-
-export const CSL_STYLES: CslStyleEntry[] = [
-  { id: "chicago-note-bibliography", zh: "Chicago 17th（注释-书目）", en: "Chicago 17th (Notes-Bibliography)" },
-  { id: "chicago-author-date", zh: "Chicago 17th（著者-出版年）", en: "Chicago 17th (Author-Date)" },
-  { id: "apa", zh: "APA 第7版", en: "APA 7th Edition" },
-  { id: "modern-language-association", zh: "MLA 第9版", en: "MLA 9th Edition" },
-  { id: "vancouver", zh: "Vancouver", en: "Vancouver" },
-  { id: "gb-t-7714-2015-numeric", zh: "GB/T 7714-2015（顺序编码）", en: "GB/T 7714-2015 (Numeric)" },
-  { id: "gb-t-7714-2015-author-date", zh: "GB/T 7714-2015（著者-出版年）", en: "GB/T 7714-2015 (Author-Date)" },
-  { id: "oscola", zh: "OSCOLA", en: "OSCOLA" },
-  { id: "harvard-cite-them-right", zh: "Harvard", en: "Harvard Cite Them Right" },
-  { id: "ieee", zh: "IEEE", en: "IEEE" },
-];
 
 // ── Toolbar button config (Improvement 3) ─────────────────────────────────
 export interface ToolbarButtons {
@@ -53,7 +48,7 @@ export interface ZoteroCitationsSettings {
 }
 
 export const DEFAULT_SETTINGS: ZoteroCitationsSettings = {
-  cslStyle: "chicago-note-bibliography",
+  cslStyle: "",
   citationMode: "endnote",
   showWordStyleFootnotes: true,
   showToolbar: true,
@@ -75,10 +70,8 @@ export const DEFAULT_SETTINGS: ZoteroCitationsSettings = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 export function getStyleName(styleId: string, settingsOrLang: Language | LanguageSettings): string {
-  const lang = typeof settingsOrLang === "string" ? settingsOrLang : getLanguage(settingsOrLang);
-  const style = CSL_STYLES.find((s) => s.id === styleId);
-  if (!style) return styleId;
-  return lang === "en" ? style.en : style.zh;
+  void settingsOrLang;
+  return INSTALLED_STYLE_TITLES.get(styleId) ?? styleId;
 }
 
 export function getModeLabel(mode: string, settingsOrLang: Language | LanguageSettings, variant: string = "option"): string {
@@ -91,10 +84,7 @@ export function getItemTypeLabel(itemType: string, settingsOrLang: Language | La
 
 interface ZoteroPluginLike extends Plugin {
   settings: ZoteroCitationsSettings;
-  api: {
-    getInstalledStyles: () => InstalledStyle[];
-    ping?: () => Promise<boolean>;
-  };
+  api: ZoteroAPI;
   saveSettings: () => Promise<void>;
   applyLanguage: () => void;
   getEditor: () => MinimalEditor | null;
@@ -102,6 +92,7 @@ interface ZoteroPluginLike extends Plugin {
   refreshEditorExtension: () => void;
   refreshToolbars: () => void;
   getCommandLabels: () => Record<string, string>;
+  ensureInstalledStyle: () => boolean;
 }
 
 // ── Setting Tab ────────────────────────────────────────────────────────────
@@ -152,33 +143,25 @@ export class ZoteroSettingTab extends PluginSettingTab {
     // ── Citation style ──
     new Setting(containerEl).setName(t(this.plugin.settings, "settings.citationStyleSection")).setHeading();
 
-    // Merge dynamic Zotero styles + fallback styles
-    let styleOptions: { id: string; title: string }[] = CSL_STYLES.map((s) => ({
-      id: s.id,
-      title: getStyleName(s.id, this.plugin.settings),
-    }));
+    let styleOptions: InstalledStyle[] = [];
     try {
-      const dynamic = this.plugin.api.getInstalledStyles();
-      if (dynamic.length) {
-        const dynamicMap = new Map(dynamic.map((s) => [s.id, s.title]));
-        for (const fallback of styleOptions) {
-          if (!dynamicMap.has(fallback.id)) dynamic.push(fallback);
-        }
-        styleOptions = dynamic;
-      }
+      styleOptions = syncInstalledStyles(this.plugin.api);
     } catch {
-      // keep fallback styles
+      styleOptions = [];
     }
 
-    new Setting(containerEl)
+    const styleSetting = new Setting(containerEl)
       .setName(t(this.plugin.settings, "settings.defaultStyle"))
       .setDesc(t(this.plugin.settings, "settings.defaultStyleDesc"))
       .addDropdown((dd) => {
         for (const s of styleOptions) dd.addOption(s.id, s.title);
-        if (!styleOptions.some((s) => s.id === this.plugin.settings.cslStyle)) {
-          dd.addOption(this.plugin.settings.cslStyle, this.plugin.settings.cslStyle);
+        const selectedExists = styleOptions.some((s) => s.id === this.plugin.settings.cslStyle);
+        if (!styleOptions.length) {
+          dd.addOption("", t(this.plugin.settings, "settings.noStylesInstalled"));
+        } else if (!selectedExists) {
+          dd.addOption("", t(this.plugin.settings, "settings.selectInstalledStyle"));
         }
-        dd.setValue(this.plugin.settings.cslStyle);
+        dd.setValue(selectedExists ? this.plugin.settings.cslStyle : "");
         dd.onChange((v: string) => {
           void (async () => {
             this.plugin.settings.cslStyle = v;
@@ -186,6 +169,7 @@ export class ZoteroSettingTab extends PluginSettingTab {
           })();
         });
       });
+    styleSetting.setClass("zotero-style-setting");
 
     new Setting(containerEl)
       .setName(t(this.plugin.settings, "settings.refreshStyles"))
@@ -195,8 +179,9 @@ export class ZoteroSettingTab extends PluginSettingTab {
         btn.onClick(() => {
           btn.setDisabled(true);
           try {
+            const refreshed = syncInstalledStyles(this.plugin.api);
             void this.display();
-            new Notice(t(this.plugin.settings, "prefs.stylesRefreshed", { count: styleOptions.length }));
+            new Notice(t(this.plugin.settings, "prefs.stylesRefreshed", { count: refreshed.length }));
           } finally {
             btn.setDisabled(false);
           }
@@ -224,10 +209,17 @@ export class ZoteroSettingTab extends PluginSettingTab {
               this.plugin.refreshEditorExtension();
               return;
             }
+            if (!this.plugin.ensureInstalledStyle()) return;
             const keys = [...new Set(all.map((c: CitationRef) => c.key))];
             const itemMap = await this.plugin.resolveItems(keys);
             if (!itemMap) return;
-            const count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
+            let count: number;
+            try {
+              count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
+            } catch (error) {
+              new Notice(t(this.plugin.settings, "notice.styleFormatFailed", { error: String(error) }), 8000);
+              return;
+            }
             this.plugin.refreshEditorExtension();
             new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
               mode: getModeLabel(v, this.plugin.settings, "short"),

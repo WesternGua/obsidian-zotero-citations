@@ -1,7 +1,7 @@
 /**
  * SearchModal.ts – In-plugin citation search fallback
  */
-import { Modal, App } from "obsidian";
+import { Modal, App, Notice } from "obsidian";
 import { Language, appT, getAppSettings } from "../i18n";
 import { ZoteroAPI, ZoteroItem, ZoteroConnectionError } from "../ZoteroAPI";
 import { CitationManager } from "../CitationManager";
@@ -27,12 +27,17 @@ export class SearchModal extends Modal {
     if (!this.selectedItem) return;
     const previewEl = this.contentEl.querySelector<HTMLElement>(".zotero-preview");
     if (!previewEl) return;
-    const preview = CitationManager.formatCitation(
-      this.selectedItem,
-      this.opts.style,
-      this.pageInput.value.trim() || undefined
-    );
-    previewEl.setText(appT(this.app, "search.preview", { preview }));
+    try {
+      const preview = CitationManager.formatCitation(
+        this.selectedItem,
+        this.opts.style,
+        this.pageInput.value.trim() || undefined
+      );
+      previewEl.setText(appT(this.app, "search.preview", { preview }));
+    } catch (error) {
+      previewEl.setText(appT(this.app, "notice.styleFormatFailed", { error: String(error) }));
+      this.confirmBtn.disabled = true;
+    }
   };
 
   constructor(app: App, opts: SearchModalOpts) {
@@ -157,11 +162,18 @@ export class SearchModal extends Modal {
     this.selectedItem = item;
     this.confirmBtn.disabled = false;
 
-    const preview = CitationManager.formatCitation(
-      item,
-      this.opts.style,
-      this.pageInput.value.trim() || undefined
-    );
+    let preview: string;
+    try {
+      preview = CitationManager.formatCitation(
+        item,
+        this.opts.style,
+        this.pageInput.value.trim() || undefined
+      );
+    } catch (error) {
+      this.confirmBtn.disabled = true;
+      new Notice(appT(this.app, "notice.styleFormatFailed", { error: String(error) }), 7000);
+      return;
+    }
 
     let previewEl = this.contentEl.querySelector<HTMLElement>(".zotero-preview");
     if (!previewEl) {

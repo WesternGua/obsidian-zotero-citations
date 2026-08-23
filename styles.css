@@ -168,6 +168,21 @@ a.zotero-rendered-footnote-ref {
   margin-top: 4px;
 }
 
+/* Citation-style dropdown: keep long style names from squeezing the
+   description column. The control column is capped and the <select>
+   truncates instead of expanding to the longest option. */
+.zotero-style-setting .setting-item-control {
+  flex: 0 1 60%;
+  min-width: 0;
+}
+
+.zotero-style-setting .setting-item-control select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
 .zotero-toolbar-buttons-section {
   padding-left: 24px;
   border-left: 2px solid var(--background-modifier-border);

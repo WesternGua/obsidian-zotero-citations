@@ -1,12 +1,13 @@
 {
   "name": "zotero-citations",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Zotero citation management with Word export via Pandoc.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
-    "check": "tsc --noEmit",
+    "check": "node node_modules/typescript/bin/tsc --noEmit",
+    "test": "node tests/run-tests.mjs",
     "version": "node version-bump.mjs"
   },
   "license": "MIT",
@@ -24,5 +25,9 @@
     "onlyBuiltDependencies": [
       "esbuild"
     ]
+  },
+  "dependencies": {
+    "@manuscripts/csl-locales": "^0.0.5",
+    "citeproc": "^2.4.63"
   }
 }

@@ -6,7 +6,7 @@ import { Modal, App, Editor, Notice } from "obsidian";
 import { appT, getAppSettings } from "../i18n";
 import { ZoteroAPI, ZoteroItem, ZoteroConnectionError, InstalledStyle } from "../ZoteroAPI";
 import { CitationManager } from "../CitationManager";
-import { CSL_STYLES, DEFAULT_SETTINGS, getStyleName, getModeLabel } from "../settings";
+import { DEFAULT_SETTINGS, getStyleName, getModeLabel, syncInstalledStyles } from "../settings";
 
 export interface PreferencesModalOpts {
   api: ZoteroAPI;
@@ -70,7 +70,7 @@ export class PreferencesModal extends Modal {
     // Style list container
     this.styleListEl = styleWrap.createDiv({ cls: "zotero-style-list" });
 
-    // Load styles (dynamic from Zotero + fallback)
+    // Load only styles currently installed in Zotero.
     this.loadStyles(false);
 
     // ── Mode selector ──
@@ -101,34 +101,15 @@ export class PreferencesModal extends Modal {
   }
 
   private loadStyles(showNotice: boolean): void {
-    // First, populate from hardcoded fallback
-    const settings = getAppSettings(this.app) || DEFAULT_SETTINGS;
-    const fallbackStyles = CSL_STYLES.map((s) => ({
-      id: s.id,
-      title: getStyleName(s.id, settings),
-    }));
-
-    // Try reading dynamic styles from Zotero
     let dynamicStyles: InstalledStyle[] = [];
     try {
-      dynamicStyles = this.opts.api.getInstalledStyles();
+      dynamicStyles = syncInstalledStyles(this.opts.api);
     } catch {
-      // ignore
+      dynamicStyles = [];
     }
-
-    if (dynamicStyles.length > 0) {
-      // Merge: dynamic styles take priority, add any fallback not already present
-      const idSet = new Set(dynamicStyles.map((s) => s.id));
-      this.allStyles = [
-        ...dynamicStyles,
-        ...fallbackStyles.filter((s) => !idSet.has(s.id)),
-      ];
-      if (showNotice) {
-        new Notice(appT(this.app, "prefs.stylesRefreshed", { count: dynamicStyles.length }));
-      }
-    } else {
-      this.allStyles = fallbackStyles;
-    }
+    this.allStyles = dynamicStyles;
+    if (!this.allStyles.some((style) => style.id === this.selectedStyle)) this.selectedStyle = "";
+    if (showNotice) new Notice(appT(this.app, "prefs.stylesRefreshed", { count: dynamicStyles.length }));
 
     this.renderStyleList(this.allStyles);
   }
@@ -147,6 +128,13 @@ export class PreferencesModal extends Modal {
 
   private renderStyleList(styles: { id: string; title: string }[]): void {
     this.styleListEl.empty();
+    if (!styles.length) {
+      this.styleListEl.createEl("p", {
+        text: appT(this.app, "prefs.noStylesInstalled"),
+        cls: "zotero-results-placeholder",
+      });
+      return;
+    }
     for (const style of styles) {
       const item = this.styleListEl.createDiv({ cls: "zotero-style-item" });
       item.textContent = style.title;
@@ -175,6 +163,11 @@ export class PreferencesModal extends Modal {
   }
 
   private async applyToDocument(btn: HTMLButtonElement): Promise<void> {
+    const currentStyles = syncInstalledStyles(this.opts.api);
+    if (!this.selectedStyle || !currentStyles.some((style) => style.id === this.selectedStyle)) {
+      new Notice(appT(this.app, "prefs.selectInstalledStyle"), 6000);
+      return;
+    }
     const editor = this.opts.getEditor();
     if (!editor) {
       new Notice(appT(this.app, "prefs.noEditor"));
