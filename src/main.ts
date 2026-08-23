@@ -608,7 +608,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   async doExport(inputPath: string, outputPath: string): Promise<void> {
     const notice = new obsidian.Notice(this.t("notice.exporting"), 0);
     try {
-      await ExportManager.exportToWord(inputPath, outputPath, this.settings);
+      await ExportManager.exportToWord(inputPath, outputPath, this.settings, this.api);
       notice.hide();
       new obsidian.Notice(this.t("notice.exportSuccess", { path: outputPath }), 8000);
     } catch (err) {

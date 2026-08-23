@@ -60,6 +60,13 @@ export interface CaywResult {
 export interface InstalledStyle {
   id: string;
   title: string;
+  uri: string;
+  isNoteStyle: boolean;
+  hasBibliography: boolean;
+}
+
+interface ParsedInstalledStyle extends InstalledStyle {
+  parentUri?: string;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -182,7 +189,7 @@ export class ZoteroAPI {
     const stylesDir = this.locateZoteroStylesDir();
     if (!stylesDir) return [];
 
-    const results = new Map<string, InstalledStyle>();
+    const parsed = new Map<string, ParsedInstalledStyle>();
     try {
       const files = fs.readdirSync(stylesDir).filter((f) => f.endsWith(".csl"));
       for (const file of files) {
@@ -193,14 +200,33 @@ export class ZoteroAPI {
           // Extract the ID from <id> or from filename
           const idMatch = content.match(/<id[^>]*>([^<]+)<\/id>/);
           let id = file.replace(/\.csl$/, "");
+          let uri = `http://www.zotero.org/styles/${id}`;
           if (idMatch) {
             // CSL IDs are typically URLs like http://www.zotero.org/styles/apa
-            const urlId = idMatch[1];
+            const urlId = decodeXmlText(idMatch[1].trim());
+            uri = urlId;
             const lastSlash = urlId.lastIndexOf("/");
             if (lastSlash !== -1) id = urlId.slice(lastSlash + 1);
           }
           const title = titleMatch ? decodeXmlText(titleMatch[1].trim()) : id;
-          if (id) results.set(id, { id, title });
+          const styleTag = content.match(/<style\b[^>]*>/i)?.[0] ?? "";
+          const styleClass = styleTag.match(/\bclass=["']([^"']+)["']/i)?.[1]?.toLowerCase();
+          const parentTag = [...content.matchAll(/<link\b[^>]*>/gi)]
+            .map((match) => match[0])
+            .find((tag) => /\brel=["']independent-parent["']/i.test(tag));
+          const parentUri = parentTag
+            ? decodeXmlText(parentTag.match(/\bhref=["']([^"']+)["']/i)?.[1] ?? "").trim() || undefined
+            : undefined;
+          if (id) {
+            parsed.set(id, {
+              id,
+              title,
+              uri,
+              isNoteStyle: styleClass === "note",
+              hasBibliography: /<bibliography\b/i.test(content),
+              parentUri,
+            });
+          }
         } catch {
           // skip unreadable files
         }
@@ -209,8 +235,31 @@ export class ZoteroAPI {
       return [];
     }
 
+    const byUri = new Map([...parsed.values()].map((style) => [style.uri, style]));
+    const resolveCapabilities = (style: ParsedInstalledStyle, seen = new Set<string>()): InstalledStyle => {
+      if (!style.parentUri || seen.has(style.uri)) return style;
+      seen.add(style.uri);
+      const parentId = style.parentUri.slice(style.parentUri.lastIndexOf("/") + 1);
+      const parent = byUri.get(style.parentUri) ?? parsed.get(parentId);
+      if (!parent) return style;
+      const resolvedParent = resolveCapabilities(parent, seen);
+      return {
+        id: style.id,
+        title: style.title,
+        uri: style.uri,
+        isNoteStyle: style.isNoteStyle || resolvedParent.isNoteStyle,
+        hasBibliography: style.hasBibliography || resolvedParent.hasBibliography,
+      };
+    };
+
     // Sort by title
-    return [...results.values()].sort((a, b) => a.title.localeCompare(b.title));
+    return [...parsed.values()]
+      .map((style) => resolveCapabilities(style))
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  getInstalledStyle(styleId: string): InstalledStyle | null {
+    return this.getInstalledStyles().find((style) => style.id === styleId) ?? null;
   }
 
   // ════════════════════════════════════════════════════════════════════════════

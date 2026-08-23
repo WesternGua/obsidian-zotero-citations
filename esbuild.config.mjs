@@ -21,6 +21,9 @@ esbuild.build({
   treeShaking: true,
   outfile: "main.js",
   platform: "node",
+  loader: {
+    ".lua": "text",
+  },
   define: {
     "process.env.NODE_ENV": JSON.stringify(prod ? "production" : "development"),
   },

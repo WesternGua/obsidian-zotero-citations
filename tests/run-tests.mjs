@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const testFiles = ["csl-sync.test.ts", "issue6-regression.test.ts"];
+const testFiles = ["csl-sync.test.ts", "issue6-regression.test.ts", "live-word-export.test.ts"];
 const outfiles = testFiles.map((_, index) =>
   path.join(os.tmpdir(), `zotero-citations-tests-${process.pid}-${index}.cjs`)
 );
@@ -21,6 +21,9 @@ try {
       format: "cjs",
       target: "es2018",
       outfile,
+      loader: {
+        ".lua": "text",
+      },
       plugins: [{
         name: "obsidian-stub",
         setup(build) {

@@ -124,6 +124,13 @@ api.locateZoteroStylesDir = () => fixtureStyles;
 const installed = api.getInstalledStyles();
 assert.deepEqual(installed.map((style) => style.id).sort(), ["apa", "ieee", "test-dependent-ieee"]);
 assert.equal(installed.some((style) => style.id === "vancouver"), false);
+assert.equal(api.getInstalledStyle("apa")?.uri, "http://www.zotero.org/styles/apa");
+assert.equal(api.getInstalledStyle("apa")?.isNoteStyle, false);
+assert.equal(api.getInstalledStyle("apa")?.hasBibliography, true);
+// Dependent styles inherit note/bibliography capabilities from the installed
+// independent parent while keeping their own URI for Word document prefs.
+assert.equal(api.getInstalledStyle("test-dependent-ieee")?.uri, "http://www.zotero.org/styles/test-dependent-ieee");
+assert.equal(api.getInstalledStyle("test-dependent-ieee")?.hasBibliography, true);
 
 // Installing and deleting a style must be visible without restarting Obsidian.
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "zotero-csl-sync-"));

@@ -1,6 +1,6 @@
 # Zotero Citations
 
-> 在 Obsidian 中管理 Zotero 引用，支持脚注/尾注模式、Word 风格显示，并一键导出为带格式脚注的 Word 文档。
+> 在 Obsidian 中管理 Zotero 引用，支持脚注/尾注模式、Word 风格显示，并一键导出为保留 Zotero 动态引文域的 Word 文档。
 
 [English](./README.md)
 
@@ -14,7 +14,7 @@
 - **仅使用 Zotero 样式** — 只显示并使用 Zotero 当前已经安装的 CSL 样式，不提供内置或近似回退样式
 - **保持 CSL 输出一致** — 同步 Zotero 的样式文件和语言规则，并支持父子样式、参考文献排序和组合引文
 - **参考书目** — 自动汇总当前文档所有引用，生成格式化参考文献列表
-- **导出为 Word** — 通过 Pandoc 将 Markdown 转换为 `.docx`；脚注/尾注模式保留注释结构，文内模式导出为正文中的作者-年份文本
+- **导出为 Word** — 通过 Pandoc 和内置 Better BibTeX Lua 过滤器生成 `.docx`；脚注、尾注和文内引用均转换为可由 Zotero 刷新和切换样式的动态引文域
 - **中英双语界面** — 设置中一键切换
 
 ---
@@ -89,16 +89,19 @@
 
 ### 4. 插入参考书目
 
-执行“插入参考书目”，插件会在光标位置生成当前文档所有引用的参考文献列表。参考书目在导出 Word 时也会保留。
+执行“插入参考书目”，插件会在光标位置生成当前文档所有引用的参考文献列表。导出 Word 时，该受管理的参考书目会转换为 Zotero 动态参考文献域。
 
 ![insert-bibliography-preview](assets/screenshots/insert-bibliography-preview.png)
 
 ### 5. 导出为 Word
 
-1. 在命令面板中执行“检测 Pandoc 是否可用”，确认 Pandoc 正常工作
-2. 执行“导出为 Word (.docx)”
+1. 确保 Zotero 正在运行且 Better BibTeX 已启用
+2. 在命令面板中执行“检测 Pandoc 是否可用”，确认 Pandoc 正常工作
+3. 执行“导出为 Word (.docx)”
 
-脚注/尾注模式下，导出的 Word 文档会保留正确注释格式；文内模式下，引用会以正文作者-年份文本导出。正文为宋体小四、1.5 倍行距、两端对齐、首行缩进两字符，标题为黑体。
+插件只会在系统临时目录中把受管理引用转换为 Pandoc `[@citationKey]` 语法，不会改写原 Markdown 笔记。导出的脚注、尾注和文内引用都会包含 `ZOTERO_ITEM CSL_CITATION` 动态域。DOCX 也会写入当前在插件中选择的 Zotero CSL 样式、Zotero 语言地区和注释类型。打开 Word 文档后可直接点击 Zotero“Refresh”，也可在“Document Preferences”中改用其他 Zotero 样式。
+
+正文为宋体小四、1.5 倍行距、两端对齐、首行缩进两字符，标题为黑体。
 
 ![export-to-word-preview](assets/screenshots/export-to-word-preview.png)
 

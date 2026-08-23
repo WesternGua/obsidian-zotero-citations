@@ -9,6 +9,8 @@ zotero-citations/
 ├── assets/screenshots/       # README images
 ├── docs/                     # Project docs
 ├── src/                      # TypeScript source
+│   └── vendor/               # Pinned third-party runtime sources bundled into main.js
+├── tests/                    # CSL, citation, and live Word-export regression tests
 ├── CHANGELOG.md
 ├── LICENSE
 ├── README.md
@@ -33,6 +35,10 @@ npm run check
 npm test
 npm run build
 ```
+
+The production build embeds the vendored Better BibTeX Pandoc live-citations
+filter into `main.js`. Word export writes the filter to a temporary directory;
+no extra release asset is required for the Lua source.
 
 After rebuilding, reload the plugin in Obsidian:
 
@@ -65,4 +71,5 @@ Likewise, `data.json` is local runtime state and should stay untracked. In contr
 4. Update `CHANGELOG.md`
 5. Bump the version with `npm version ...`
 6. Confirm `manifest.json` and `versions.json` were updated
-7. Attach `main.js`, `manifest.json`, and `styles.css` to the GitHub release if distributing release artifacts
+7. Update `RELEASE_NOTES.md` using the same English heading-and-bullets format as prior releases
+8. Attach `main.js`, `manifest.json`, and `styles.css` to the GitHub release if distributing release artifacts

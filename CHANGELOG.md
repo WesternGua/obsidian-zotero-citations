@@ -6,6 +6,24 @@
 
 ---
 
+## [0.2.8] - 2026-08-23
+
+### 新增
+
+- Word 导出集成 Better BibTeX `zotero.lua` Pandoc 过滤器。插件管理的脚注、尾注和文内引用现在导出为可由 Zotero Word 插件刷新和切换样式的 `ZOTERO_ITEM CSL_CITATION` 动态域。
+- 已插入的插件参考书目在 Word 导出时转换为 `ZOTERO_BIBL` 动态参考文献域。
+
+### 改进
+
+- 导出转换仅作用于系统临时目录中的 Markdown 副本，不会改写用户原笔记。
+- Word 导出会批量将 Zotero item key 解析为 Better BibTeX citation key，并对 Zotero、Better BibTeX、CSL 样式或 citation key 不可用的情况给出明确错误。
+- 导出的 DOCX 预先写入当前 Zotero CSL 样式的完整 URI、Zotero 语言地区、参考文献能力和注释类型。在 Word 中可直接执行 Zotero Refresh，不再依赖 Word 上次使用的样式。
+- 内置 Lua 过滤器固定到已验证的 Better BibTeX 上游版本，并移除上游在导出时执行的在线版本检查，保持导出全程本地化。
+
+### 测试
+
+- 新增 Word 动态引文导出回归测试，覆盖组合引文、定位符、脚注、尾注、文内引用、动态参考文献域、原文保护和无引用文档回归。
+
 ## [0.2.7] - 2026-08-23
 
 ### 改进

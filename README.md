@@ -1,6 +1,6 @@
 # Zotero Citations
 
-> Manage Zotero citations in Obsidian with footnote/endnote modes, Word-style display, and one-click export to Word with formatted footnotes.
+> Manage Zotero citations in Obsidian with footnote/endnote modes, Word-style display, and one-click export to Word with live Zotero citation fields.
 
 [简体中文](./README_zh.md)
 
@@ -14,7 +14,7 @@
 - **Zotero-only CSL styles** — Shows and uses only styles currently installed in Zotero; there are no built-in or approximate fallback styles
 - **Matching CSL output** — Uses Zotero's style files and locale rules, including dependent styles, bibliography sorting, and citation clusters
 - **Bibliography** — Auto-generates a formatted reference list from all citations in the current document
-- **Export to Word** — Converts Markdown to `.docx` via Pandoc; footnote/endnote modes preserve note structure, while in-text mode exports citations as plain paragraph text
+- **Export to Word** — Uses Pandoc and a bundled Better BibTeX Lua filter to create `.docx` files whose footnote, endnote, and in-text citations remain live Zotero fields that can be refreshed and restyled
 - **Bilingual UI** — Switch between Chinese and English in settings
 
 ---
@@ -89,16 +89,19 @@ Run `Document preferences` to open the preferences panel. The plugin dynamically
 
 ### 4. Insert a Bibliography
 
-Run `Insert bibliography` to generate a formatted reference list at the cursor position. The bibliography is also preserved when exporting to Word.
+Run `Insert bibliography` to generate a formatted reference list at the cursor position. On Word export, this managed bibliography is converted to a live Zotero bibliography field.
 
 ![en-insert-bibliography](assets/screenshots/en-insert-bibliography.png)
 
 ### 5. Export to Word
 
-1. Run `Check whether Pandoc is available` first to confirm Pandoc is working.
-2. Run `Export to Word (.docx)`.
+1. Make sure Zotero is running and Better BibTeX is enabled.
+2. Run `Check whether Pandoc is available` to confirm Pandoc is working.
+3. Run `Export to Word (.docx)`.
 
-In footnote/endnote mode, the exported Word document keeps properly formatted notes. In in-text mode, citations are exported as plain author-year text in the main paragraph. Body text is SimSun 12pt, 1.5 line spacing, justified alignment, first-line indent, and headings in SimHei.
+The plugin converts managed citations to Pandoc `[@citationKey]` syntax only in a system temporary copy; it never rewrites the source Markdown note. Footnote, endnote, and in-text citations in the resulting document contain live `ZOTERO_ITEM CSL_CITATION` fields. The DOCX also stores the CSL style currently selected in the plugin, Zotero's locale, and the appropriate note type. Open the document and click Zotero `Refresh` directly, or use `Document Preferences` to switch to another Zotero style.
+
+Body text is SimSun 12pt, 1.5 line spacing, justified alignment, first-line indent, and headings in SimHei.
 
 ![en-export-to-word-preview](assets/screenshots/en-export-to-word-preview.png)
 
