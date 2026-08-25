@@ -39,6 +39,7 @@ export interface ZoteroDocumentPreferences {
 export interface PreparedPandocInput {
   path: string;
   filterPath: string | null;
+  filterStyleUri: string | null;
   citationCount: number;
   hasDynamicBibliography: boolean;
   documentPreferences: ZoteroDocumentPreferences | null;
@@ -99,7 +100,12 @@ export function buildPandocCitation(entries: CitationEntry[], citationKeys: Map<
     if (/\s|[\[\];]/.test(citekey)) {
       throw new Error(`Unsupported Better BibTeX citation key: ${citekey}`);
     }
-    const locator = entry.page.trim();
+    // A semicolon separates items inside a Pandoc citation cluster, while a
+    // closing bracket terminates the cluster. Locators may legitimately use
+    // both characters (for example, "paras. 1–3; arts. 1, 3"), so escape them
+    // in the temporary Markdown. Pandoc removes the escape before the Lua
+    // filter parses the locator and suffix.
+    const locator = entry.page.trim().replace(/([;\]])/g, "\\$1");
     return `@${citekey}${locator ? `, ${locator}` : ""}`;
   });
   return `[${citations.join("; ")}]`;
@@ -241,7 +247,7 @@ export class ExportManager {
         prepared.filterPath ? "--lua-filter" : "",
         prepared.filterPath ? ExportManager.q(prepared.filterPath) : "",
         prepared.filterPath ? ExportManager.q("--metadata=zotero_client:zotero") : "",
-        prepared.filterPath ? ExportManager.q(`--metadata=zotero_csl-style:${settings.cslStyle}`) : "",
+        prepared.filterStyleUri ? ExportManager.q(`--metadata=zotero_csl-style:${prepared.filterStyleUri}`) : "",
         prepared.documentPreferences ? ExportManager.q(`--metadata=ZOTERO_PREF_1:${prepared.documentPreferences.pref1}`) : "",
         prepared.documentPreferences ? ExportManager.q(`--metadata=ZOTERO_PREF_2:${prepared.documentPreferences.pref2}`) : "",
         extraFlags,
@@ -269,6 +275,7 @@ export class ExportManager {
       return {
         path: inputPath,
         filterPath: null,
+        filterStyleUri: null,
         citationCount: 0,
         hasDynamicBibliography: false,
         documentPreferences: null,
@@ -322,6 +329,7 @@ export class ExportManager {
       return {
         path: tempPath,
         filterPath,
+        filterStyleUri: installedStyle.uri,
         citationCount: transformed.citationCount,
         hasDynamicBibliography: transformed.hasDynamicBibliography,
         documentPreferences,

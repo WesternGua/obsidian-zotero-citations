@@ -37,9 +37,9 @@ assert.deepEqual(collectManagedItemKeys(input), ["ITEM_A", "ITEM_B"]);
 assert.equal(
   buildPandocCitation([
     { key: "ITEM_A", page: "p. 10", formattedText: "Alpha" },
-    { key: "ITEM_B", page: "para. 32", formattedText: "Beta" },
+    { key: "ITEM_B", page: "para. 32; arts. 1, 3", formattedText: "Beta" },
   ], keys),
-  "[@alpha2020, p. 10; @beta2024, para. 32]",
+  "[@alpha2020, p. 10; @beta2024, para. 32\\; arts. 1, 3]",
 );
 
 const transformed = transformManagedCitationsForPandoc(input, keys);
@@ -82,16 +82,27 @@ async function runAsyncTests(): Promise<void> {
     {
       pingBBT: async () => true,
       getCitationKeys: async () => keys,
+      getInstalledStyle: () => ({
+        uri: "https://zotero-chinese.com/styles/法学引注手册（多语言）",
+        isNoteStyle: true,
+        hasBibliography: true,
+      }),
     },
-    { ...DEFAULT_SETTINGS, cslStyle: "apa" },
+    { ...DEFAULT_SETTINGS, cslStyle: "法学引注手册（多语言）" },
   );
   assert.notEqual(prepared.path, sourcePath);
   assert.ok(prepared.filterPath);
+  assert.equal(
+    prepared.filterStyleUri,
+    "https://zotero-chinese.com/styles/法学引注手册（多语言）",
+  );
   assert.equal(prepared.citationCount, 4);
   assert.ok(prepared.documentPreferences);
   assert.equal(await fs.readFile(sourcePath, "utf8"), input);
   assert.match(await fs.readFile(prepared.path, "utf8"), /@alpha2020/);
   assert.match(await fs.readFile(prepared.filterPath!, "utf8"), /ADDIN ZOTERO_ITEM CSL_CITATION/);
+  assert.match(await fs.readFile(prepared.filterPath!, "utf8"), /string\.format\("%%%02X", byte\)/);
+  assert.match(await fs.readFile(prepared.filterPath!, "utf8"), /error\('could not fetch Zotero items:/);
   await prepared.cleanup();
   await fs.rm(tempDir, { recursive: true, force: true });
 
@@ -110,6 +121,7 @@ async function runAsyncTests(): Promise<void> {
   );
   assert.equal(plain.path, plainPath);
   assert.equal(plain.filterPath, null);
+  assert.equal(plain.filterStyleUri, null);
   assert.equal(plain.documentPreferences, null);
   await fs.rm(plainDir, { recursive: true, force: true });
 

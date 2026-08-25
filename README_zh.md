@@ -99,7 +99,7 @@
 2. 在命令面板中执行“检测 Pandoc 是否可用”，确认 Pandoc 正常工作
 3. 执行“导出为 Word (.docx)”
 
-插件只会在系统临时目录中把受管理引用转换为 Pandoc `[@citationKey]` 语法，不会改写原 Markdown 笔记。导出的脚注、尾注和文内引用都会包含 `ZOTERO_ITEM CSL_CITATION` 动态域。DOCX 也会写入当前在插件中选择的 Zotero CSL 样式、Zotero 语言地区和注释类型。打开 Word 文档后可直接点击 Zotero“Refresh”，也可在“Document Preferences”中改用其他 Zotero 样式。
+插件只会在系统临时目录中把受管理引用转换为 Pandoc `[@citationKey]` 语法，不会改写原 Markdown 笔记。导出的脚注、尾注和文内引用都会包含 `ZOTERO_ITEM CSL_CITATION` 动态域。DOCX 会写入 Zotero 已安装 CSL 样式的准确 URI，包括不使用 Zotero 官方样式域名的自定义样式，同时写入 Zotero 语言地区和注释类型。Better BibTeX 无法解析样式或 citation key 时，导出会显示错误并停止，不会生成包含纯文本 citation key 的 Word 文档。打开 Word 文档后可直接点击 Zotero“Refresh”，也可在“Document Preferences”中改用其他 Zotero 样式。
 
 正文为宋体小四、1.5 倍行距、两端对齐、首行缩进两字符，标题为黑体。
 

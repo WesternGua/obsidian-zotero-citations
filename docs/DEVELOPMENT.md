@@ -40,6 +40,11 @@ The production build embeds the vendored Better BibTeX Pandoc live-citations
 filter into `main.js`. Word export writes the filter to a temporary directory;
 no extra release asset is required for the Lua source.
 
+The vendored filter contains deliberate local patches in addition to the
+removed online update check. They preserve UTF-8 byte encoding for custom CSL
+style URIs and make Better BibTeX lookup failures abort the export. Preserve or
+reapply these patches when updating the pinned upstream filter.
+
 After rebuilding, reload the plugin in Obsidian:
 
 ```bash
@@ -68,8 +73,9 @@ Likewise, `data.json` is local runtime state and should stay untracked. In contr
 1. Run `npm run check`
 2. Run `npm test`
 3. Run `npm run build`
-4. Update `CHANGELOG.md`
-5. Bump the version with `npm version ...`
-6. Confirm `manifest.json` and `versions.json` were updated
-7. Update `RELEASE_NOTES.md` using the same English heading-and-bullets format as prior releases
-8. Attach `main.js`, `manifest.json`, and `styles.css` to the GitHub release if distributing release artifacts
+4. For live Word-export changes, inspect the generated DOCX for the expected number of `ADDIN ZOTERO_ITEM CSL_CITATION` fields and complete a Zotero Word Refresh smoke test
+5. Update `CHANGELOG.md`
+6. Bump the version with `npm version ...`
+7. Confirm `package.json`, `package-lock.json`, `manifest.json`, and `versions.json` use the release version
+8. Update `RELEASE_NOTES.md` using the same English heading-and-bullets format as prior releases
+9. Attach `main.js`, `manifest.json`, and `styles.css` to the GitHub release if distributing release artifacts

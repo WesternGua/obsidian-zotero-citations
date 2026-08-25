@@ -1553,13 +1553,25 @@ function module.next_id(length)
   return string.format(string.format('%%0%dd', length), module.id_number)
 end
 
-local function url_encode_char(chr)
-  return string.format("%%%X",string.byte(chr))
-end
-
 function module.urlencode(str)
-  local output, t = string.gsub(str,"[^%w]",url_encode_char)
-  return output
+  -- Encode the UTF-8 byte sequence rather than relying on Lua's locale-aware
+  -- pattern matching. Pandoc 3.9's Lua runtime may otherwise pass a complete
+  -- non-ASCII character to the replacement callback and only its first byte is
+  -- encoded, corrupting custom CSL style URIs before Better BibTeX receives
+  -- the JSON-RPC request.
+  local encoded = {}
+  for index = 1, #str do
+    local byte = string.byte(str, index)
+    if (byte >= 48 and byte <= 57)
+      or (byte >= 65 and byte <= 90)
+      or (byte >= 97 and byte <= 122)
+      or byte == 45 or byte == 46 or byte == 95 or byte == 126 then
+      table.insert(encoded, string.char(byte))
+    else
+      table.insert(encoded, string.format("%%%02X", byte))
+    end
+  end
+  return table.concat(encoded)
 end
 
 function module.xmlescape(str)
@@ -1654,12 +1666,10 @@ local function load_items()
   local mt, body = pandoc.mediabag.fetch(url, '.')
   local ok, response = pcall(json.decode, body)
   if not ok then
-    print('could not fetch Zotero items: ' .. response .. '(' .. body .. ')')
-    return
+    error('could not fetch Zotero items: ' .. response .. '(' .. body .. ')')
   end
   if response.error ~= nil then
-    print('could not fetch Zotero items: ' .. response.error.message)
-    return
+    error('could not fetch Zotero items: ' .. response.error.message)
   end
   state.fetched = response.result
 end
@@ -1672,19 +1682,15 @@ function module.get(citekey)
   end
 
   if state.fetched.errors[citekey] ~= nil then
-    state.reported[citekey] = true
     if state.fetched.errors[citekey] == 0 then
-      print('@' .. citekey .. ': not found')
+      error('@' .. citekey .. ': not found')
     else
-      print('@' .. citekey .. ': duplicates found')
+      error('@' .. citekey .. ': duplicates found')
     end
-    return nil
   end
 
   if state.fetched.items[citekey] == nil then
-    state.reported[citekey] = true
-    print('@' .. citekey .. ' not in Zotero')
-    return nil
+    error('@' .. citekey .. ' not in Zotero')
   end
 
   return state.fetched.items[citekey]
@@ -2147,4 +2153,3 @@ return {
   { Div = Div },
   { Doc = Doc },
 }
-

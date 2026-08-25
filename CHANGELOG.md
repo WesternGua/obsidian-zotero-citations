@@ -6,6 +6,20 @@
 
 ---
 
+## [0.2.9] - 2026-08-25
+
+### 修复
+
+- 修复 Word 导出将 CSL 样式短名称传递给 Better BibTeX 的问题。自定义样式和非 Zotero 官方域名的样式现在使用 Zotero 已安装样式的完整 URI，避免导出结果残留 `[@citationKey]` 纯文本。
+- 修复内置 Lua 过滤器在 Pandoc 3.9 的 Lua 运行环境中错误编码中文等非 ASCII 样式 URI 的问题。JSON-RPC 请求现在按 UTF-8 字节进行百分号编码。
+- 修复定位符包含分号或右方括号时 Pandoc 无法识别完整引文的问题。复杂定位信息会在临时 Markdown 中正确转义，不影响原笔记。
+- 修复 Better BibTeX 无法解析样式、citation key 或条目时仍然生成纯文本 Word 文档的问题。过滤器现在终止导出并返回明确错误。
+
+### 测试
+
+- 扩充 Word 动态引文导出回归测试，覆盖中文自定义样式 URI、UTF-8 URL 编码、复杂定位符和 Better BibTeX 查询失败处理。
+- 使用包含 21 条脚注的实际文档完成端到端验证。导出结果中的全部脚注均保留 `ZOTERO_ITEM CSL_CITATION` 动态域，并可由 Zotero Word 插件刷新。
+
 ## [0.2.8] - 2026-08-23
 
 ### 新增

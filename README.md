@@ -99,7 +99,7 @@ Run `Insert bibliography` to generate a formatted reference list at the cursor p
 2. Run `Check whether Pandoc is available` to confirm Pandoc is working.
 3. Run `Export to Word (.docx)`.
 
-The plugin converts managed citations to Pandoc `[@citationKey]` syntax only in a system temporary copy; it never rewrites the source Markdown note. Footnote, endnote, and in-text citations in the resulting document contain live `ZOTERO_ITEM CSL_CITATION` fields. The DOCX also stores the CSL style currently selected in the plugin, Zotero's locale, and the appropriate note type. Open the document and click Zotero `Refresh` directly, or use `Document Preferences` to switch to another Zotero style.
+The plugin converts managed citations to Pandoc `[@citationKey]` syntax only in a system temporary copy; it never rewrites the source Markdown note. Footnote, endnote, and in-text citations in the resulting document contain live `ZOTERO_ITEM CSL_CITATION` fields. The DOCX stores the exact URI of the CSL style installed in Zotero, including custom styles hosted outside the official Zotero style domain, together with Zotero's locale and the appropriate note type. If Better BibTeX cannot resolve a style or citation key, export stops with an error instead of producing a document containing plain citation-key text. Open the document and click Zotero `Refresh` directly, or use `Document Preferences` to switch to another Zotero style.
 
 Body text is SimSun 12pt, 1.5 line spacing, justified alignment, first-line indent, and headings in SimHei.
 

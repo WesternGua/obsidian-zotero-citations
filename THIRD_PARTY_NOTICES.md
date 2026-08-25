@@ -29,8 +29,10 @@ converts Pandoc citation nodes to live Zotero fields in Word/LibreOffice.
 - Upstream filter revision: `199d652`
 
 The upstream online update check was removed from the vendored copy so Word
-exports remain local-only. The filter's MIT license notice is retained in the
-vendored source.
+exports remain local-only. Local patches also encode non-ASCII CSL style URIs
+byte-for-byte for Pandoc's Lua runtime and make unresolved Better BibTeX items
+fail the export instead of falling back to plain citation-key text. The
+filter's MIT license notice is retained in the vendored source.
 
 ## Test-only CSL styles
 
