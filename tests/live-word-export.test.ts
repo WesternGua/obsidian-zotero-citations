@@ -13,11 +13,11 @@ import {
 import { DEFAULT_SETTINGS } from "../src/settings";
 
 const input = [
-  "Inline ^[<!-- zotero:ITEM_A:p.%2010 --> Alpha; <!-- zotero:ITEM_B:para.%2032 --> Beta].",
-  "In text ^[<!-- zotero-intext:ITEM_B: --> (Beta, 2024)].",
+  "Inline ^[<!-- zotero:ITEM_A:p.%2010 --> Alpha; <!-- zotero:ITEM_B:para.%2032 --> Beta<!-- /zotero-citation -->].",
+  "In text ^[<!-- zotero-intext:ITEM_B: --> (Beta, 2024)<!-- /zotero-citation -->].",
   "Endnote[^7].",
   "",
-  "[^7]: <!-- zotero:ITEM_A:pp.%2020-22 --> Alpha endnote",
+  "[^7]: <!-- zotero:ITEM_A:pp.%2020-22 --> Alpha endnote<!-- /zotero-citation -->",
   "",
   "<!-- zotero-bibliography-start -->",
   "",

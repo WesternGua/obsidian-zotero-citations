@@ -1,0 +1,17 @@
+import assert from "node:assert/strict";
+import { resolveFootnoteJump, navigateFootnote } from "../src/extensions/FootnoteNavigation";
+import { EditorState } from "@codemirror/state";
+const text="First[^note] and second[^note]. Missing[^absent].\n\n[^note]: Footnote text.\n    continuation.\n\n`[^code]`\n\n[^code]: Code example.";
+const first=text.indexOf("[^note]");const second=text.indexOf("[^note]",first+1);const def=text.indexOf("[^note]:");
+assert.equal(resolveFootnoteJump(text,first+2)?.to,def);
+assert.equal(resolveFootnoteJump(text,second+2)?.to,def);
+assert.equal(resolveFootnoteJump(text,def+2)?.to,first);
+assert.equal(resolveFootnoteJump(text,def+2,new Map([["note",second]]))?.to,second);
+assert.equal(resolveFootnoteJump(text,text.indexOf("[^absent]")+2),null);
+assert.equal(resolveFootnoteJump(text,text.indexOf("[^code]")+2),null);
+assert.equal(resolveFootnoteJump(text,text.indexOf("continuation")),null);
+let state=EditorState.create({doc:text});let focuses=0;const transactions:any[]=[];
+const view:any={get state(){return state;},contentDOM:{focus(options:any){assert.equal(options.preventScroll,true);focuses++;}},dispatch(spec:any){transactions.push(spec);state=state.update(spec).state;}};
+assert.equal(navigateFootnote(view,second+2),true);assert.equal(state.selection.main.head,def);
+assert.equal(navigateFootnote(view,def+2),true);assert.equal(state.selection.main.head,second);assert.equal(focuses,2);assert.equal(state.doc.toString(),text);assert.ok(transactions.every(t=>t.effects));
+console.log("Footnote double-click destinations, repeated references and non-mutating editor navigation tests passed.");

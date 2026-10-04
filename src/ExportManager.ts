@@ -16,11 +16,14 @@ import { randomBytes } from "crypto";
 import { t } from "./i18n";
 import { ZoteroCitationsSettings, DEFAULT_SETTINGS } from "./settings";
 import { CitationEntry, CitationManager } from "./CitationManager";
+import type { ZoteroItem } from "./ZoteroAPI";
+import { resolveCitationContent, citationBody, CitationBoundaryError } from "./CitationContent";
 import zoteroLiveCitationsFilter from "./vendor/zotero-live-citations.lua";
 
 export const execAsync = promisify(exec);
 
 export interface CitationKeyResolver {
+  getItemsByKeys?(keys: string[]): Promise<Map<string, ZoteroItem>>;
   pingBBT(): Promise<boolean>;
   getCitationKeys(itemKeys: string[]): Promise<Map<string, string>>;
   getInstalledStyle?(styleId: string): {
@@ -160,15 +163,22 @@ export function buildZoteroDocumentPreferences(
 export function transformManagedCitationsForPandoc(
   content: string,
   citationKeys: Map<string, string>,
+  items = new Map<string,ZoteroItem>(),
+  style = "",
 ): { content: string; citationCount: number; hasDynamicBibliography: boolean } {
   const replacements: Replacement[] = [];
   let citationCount = 0;
+  const suffix = (citation: {fullMatch:string;entries:CitationEntry[]}, kind: string) => {
+    const parts = resolveCitationContent(citationBody(citation.fullMatch,kind),citation.entries,items,style,kind==="intext");
+    if (!parts.safe || citation.entries.some(entry=>entry.error)) throw new CitationBoundaryError();
+    return parts.suffix;
+  };
 
   for (const citation of CitationManager.parseInlineCitations(content)) {
     replacements.push({
       start: citation.index,
       end: citation.index + citation.fullMatch.length,
-      text: `^[${buildPandocCitation(citation.entries, citationKeys)}]`,
+      text: `^[${buildPandocCitation(citation.entries, citationKeys)}${suffix(citation,"inline")}]`,
     });
     citationCount += citation.entries.length;
   }
@@ -177,7 +187,7 @@ export function transformManagedCitationsForPandoc(
     replacements.push({
       start: citation.defIndex,
       end: citation.defIndex + citation.fullMatch.length,
-      text: `[^${citation.label}]: ${buildPandocCitation(citation.entries, citationKeys)}`,
+      text: `[^${citation.label}]: ${buildPandocCitation(citation.entries, citationKeys)}${suffix(citation,"endnote")}`,
     });
     citationCount += citation.entries.length;
   }
@@ -186,7 +196,7 @@ export function transformManagedCitationsForPandoc(
     replacements.push({
       start: citation.index,
       end: citation.index + citation.fullMatch.length,
-      text: buildPandocCitation(citation.entries, citationKeys),
+      text: buildPandocCitation(citation.entries, citationKeys) + suffix(citation,"intext"),
     });
     citationCount += citation.entries.length;
   }
@@ -283,6 +293,8 @@ export class ExportManager {
       };
     }
 
+    const port=Number(settings.zoteroPort ?? 23119);
+    if(!Number.isInteger(port)||port<1||port>65535) throw new ExportError(t(settings,"export.invalidPort"));
     if (!settings.cslStyle.trim()) {
       throw new ExportError(t(settings, "export.styleMissing"));
     }
@@ -298,7 +310,8 @@ export class ExportManager {
 
     let transformed: ReturnType<typeof transformManagedCitationsForPandoc>;
     try {
-      transformed = transformManagedCitationsForPandoc(content, citationKeys);
+      const items = resolver.getItemsByKeys ? await resolver.getItemsByKeys(itemKeys) : new Map<string,ZoteroItem>();
+      transformed = transformManagedCitationsForPandoc(content, citationKeys, items, settings.cslStyle);
     } catch (error) {
       throw new ExportError(t(settings, "export.citationTransformFailed", { error: getErrorMessage(error) }));
     }
@@ -324,7 +337,7 @@ export class ExportManager {
       const filterPath = path.join(tempDir, "zotero-live-citations.lua");
       await Promise.all([
         fs.writeFile(tempPath, transformed.content, "utf8"),
-        fs.writeFile(filterPath, zoteroLiveCitationsFilter, "utf8"),
+        fs.writeFile(filterPath, zoteroLiveCitationsFilter.replace("127.0.0.1:23119",`127.0.0.1:${port}`), "utf8"),
       ]);
       return {
         path: tempPath,

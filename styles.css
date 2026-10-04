@@ -100,41 +100,45 @@ a.zotero-rendered-footnote-ref {
   margin-bottom: 0;
 }
 
-.zotero-footnote-locator-editor {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px 10px;
+.zotero-locator-chip {
+  display: inline;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 0 0.18em;
+  cursor: pointer;
+  white-space: nowrap;
 }
-
-.zotero-footnote-locator-editor input {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 26px;
-  padding: 2px 8px;
-  font-size: 0.9em;
-  border-radius: 6px;
+.zotero-locator-chip:hover,
+.zotero-locator-chip:focus-visible {
+  border-color: var(--interactive-accent);
+  outline: none;
 }
-
-.zotero-footnote-locator-editor > div,
-.zotero-btn-row {
-  display: flex;
-  justify-content: flex-end;
+.zotero-locator-chip.is-editing {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.18em;
+  padding: 0;
+  max-width: 100%;
+  vertical-align: baseline;
 }
-
-.zotero-footnote-locator-editor button {
-  height: 26px;
-  padding: 2px 8px;
-  font-size: 0.85em;
-  border-radius: 6px;
+.zotero-locator-chip select,
+.zotero-locator-chip input {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  height: 1.5em;
+  margin: 0;
+  padding: 0 0.2em;
+  border: none;
+  border-radius: 3px;
 }
-
-.zotero-footnote-locator-warning {
-  padding: 0 12px 10px;
-  color: var(--text-warning);
-  font-size: 0.85em;
-  line-height: 1.4;
-}
+.zotero-locator-chip select { max-width: 11em; }
+.zotero-locator-chip input { min-width: 3ch; max-width: calc(100vw - 48px); flex: 0 0 auto; }
+.zotero-locator-fallback { font-size: 0.8em; }
+.zotero-btn-row { display: flex; justify-content: flex-end; }
+.zotero-navigable-footnote { list-style: none; }
+.zotero-footnote-definition-number { cursor: pointer; color: var(--text-accent); }
+.zotero-footnote-jump-target { background: var(--text-highlight-bg); border-radius: 3px; }
 
 /* Settings */
 .zotero-status-dot {
@@ -205,8 +209,7 @@ a.zotero-rendered-footnote-ref {
 
 /* Modals */
 .modal .zotero-prefs-modal,
-.modal .zotero-unlink-modal,
-.modal .zotero-search-modal {
+.modal .zotero-unlink-modal {
   padding-top: 0;
 }
 
@@ -227,7 +230,6 @@ a.zotero-rendered-footnote-ref {
 
 .zotero-style-search-input,
 .zotero-mode-select,
-.zotero-search-input,
 .zotero-export-input {
   width: 100%;
 }
@@ -237,8 +239,7 @@ a.zotero-rendered-footnote-ref {
   padding: 4px 8px;
 }
 
-.zotero-style-list,
-.zotero-results {
+.zotero-style-list {
   overflow-y: auto;
 }
 
@@ -257,8 +258,7 @@ a.zotero-rendered-footnote-ref {
   margin-top: 6px;
 }
 
-.zotero-prefs-info,
-.zotero-preview {
+.zotero-prefs-info {
   background: var(--background-secondary);
   border-radius: 4px;
 }
@@ -277,8 +277,7 @@ a.zotero-rendered-footnote-ref {
   margin-top: 12px;
 }
 
-.zotero-style-item,
-.zotero-result-row {
+.zotero-style-item {
   cursor: pointer;
   border-radius: 4px;
 }
@@ -288,13 +287,11 @@ a.zotero-rendered-footnote-ref {
   border-radius: 3px;
 }
 
-.zotero-style-item:hover,
-.zotero-result-row:hover {
+.zotero-style-item:hover {
   background: var(--background-modifier-hover);
 }
 
-.zotero-style-item.is-selected,
-.zotero-result-row.is-selected {
+.zotero-style-item.is-selected {
   background: var(--background-modifier-active-hover);
 }
 
@@ -302,44 +299,25 @@ a.zotero-rendered-footnote-ref {
   font-weight: 600;
 }
 
-.zotero-results {
-  max-height: 300px;
-  margin: 8px 0;
-}
 
-.zotero-page-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
 
-.zotero-page-input {
-  flex: 1;
-}
 
-.zotero-result-row {
-  padding: 6px 8px;
-}
 
-.zotero-result-title {
-  font-weight: 500;
-}
 
-.zotero-result-meta,
 .zotero-results-placeholder,
 .zotero-style-hint {
   color: var(--text-muted);
 }
 
-.zotero-preview {
-  padding: 6px 10px;
-  margin-top: 8px;
-  font-style: italic;
-}
 
 .zotero-export-input {
   margin-bottom: 12px;
   padding: 6px 10px;
   box-sizing: border-box;
 }
+
+.zotero-citation-issue-highlight { background: var(--text-highlight-bg); outline: 1px solid var(--text-error); border-radius: 2px; }
+.zotero-citation-issues-panel { position: fixed; top: 48px; right: 18px; z-index: 10000; width: min(360px, calc(100vw - 36px)); max-height: 65vh; overflow: auto; padding: 12px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); color: var(--text-normal); box-shadow: var(--shadow-s); }
+.zotero-citation-issues-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.zotero-citation-issues-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.zotero-citation-issues-list button { text-align: left; white-space: normal; height: auto; padding: 6px; }

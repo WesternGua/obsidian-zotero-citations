@@ -5,7 +5,7 @@
 import { Modal, App, Editor, Notice } from "obsidian";
 import { appT, getAppSettings } from "../i18n";
 import { ZoteroAPI, ZoteroItem, ZoteroConnectionError, InstalledStyle } from "../ZoteroAPI";
-import { CitationManager } from "../CitationManager";
+import { CitationManager, type CitationIssue } from "../CitationManager";
 import { DEFAULT_SETTINGS, getStyleName, getModeLabel, syncInstalledStyles } from "../settings";
 
 export interface PreferencesModalOpts {
@@ -16,6 +16,7 @@ export interface PreferencesModalOpts {
   onModeChange: (mode: string) => Promise<void>;
   refreshEditorExtension?: () => void;
   getEditor: () => Editor | null;
+  onIssues?: (editor:Editor,issues:CitationIssue[],count:number)=>void;
   getItemFromCache: (key: string) => ZoteroItem | undefined;
   fetchAndCacheItem: (key: string) => Promise<ZoteroItem | null>;
 }
@@ -173,7 +174,8 @@ export class PreferencesModal extends Modal {
       new Notice(appT(this.app, "prefs.noEditor"));
       return;
     }
-    const citations = CitationManager.parseDocumentCitations(editor.getValue());
+    const originalContent = editor.getValue();
+    const citations = CitationManager.parseDocumentCitations(originalContent);
     if (!citations.length) {
       await this.opts.onStyleChange(this.selectedStyle);
       new Notice(appT(this.app, "prefs.noCitationsToReformat"));
@@ -184,7 +186,7 @@ export class PreferencesModal extends Modal {
     btn.disabled = true;
     btn.setText(appT(this.app, "prefs.fetching"));
     try {
-      const uniqueKeys = [...new Set(citations.map((c) => c.key))];
+      const uniqueKeys = [...new Set(citations.flatMap(c=>c.entries.map(entry=>entry.key)))];
       const itemMap = new Map<string, ZoteroItem>();
       for (const key of uniqueKeys) {
         const cached = this.opts.getItemFromCache(key);
@@ -197,13 +199,17 @@ export class PreferencesModal extends Modal {
         new Notice(appT(this.app, "prefs.missingWarning", { count: missing.length }), 6000);
       }
 
+      if(this.opts.getEditor()!==editor || editor.getValue()!==originalContent){new Notice(appT(this.app,"notice.operationChanged"),7000);btn.disabled=false;btn.setText(appT(this.app,"prefs.apply"));return;}
       btn.setText(appT(this.app, "prefs.updating"));
       await this.opts.onStyleChange(this.selectedStyle);
       await this.opts.onModeChange(this.selectedMode);
-      const count = CitationManager.refreshDocument(editor, itemMap, this.selectedStyle, this.selectedMode);
+      if(this.opts.getEditor()!==editor || editor.getValue()!==originalContent){new Notice(appT(this.app,"notice.operationChanged"),7000);btn.disabled=false;return;}
+      const issues:CitationIssue[]=[];
+      const count = CitationManager.refreshDocument(editor, itemMap, this.selectedStyle, this.selectedMode,itemMap,issue=>issues.push(issue));
+      if(issues.length)this.opts.onIssues?.(editor,issues,count);
       if (this.opts.refreshEditorExtension) this.opts.refreshEditorExtension();
       const modeName = getModeLabel(this.selectedMode, getAppSettings(this.app) || DEFAULT_SETTINGS, "label");
-      new Notice(appT(this.app, "prefs.updated", {
+      if(!issues.length)new Notice(appT(this.app, "prefs.updated", {
         count,
         style: getStyleName(this.selectedStyle, getAppSettings(this.app) || DEFAULT_SETTINGS),
         mode: modeName,

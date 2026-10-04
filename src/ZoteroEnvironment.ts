@@ -115,6 +115,19 @@ function systemLocale(): string {
   }
 }
 
+/** The locator menu follows Zotero's interface language, not bibliography language. */
+export function readZoteroUILocale(): string {
+  const profile = locateZoteroProfileDir();
+  if (profile) {
+    try {
+      const prefs = fs.readFileSync(path.join(profile, "prefs.js"), "utf-8");
+      const match = prefs.match(/user_pref\("intl.locale.requested",\s*"([^"]+)"\);/);
+      if (match?.[1]) return normalizeLocale(match[1].split(",")[0]);
+    } catch { /* use system language */ }
+  }
+  return systemLocale();
+}
+
 /** Read Zotero's own locale preference so citeproc uses the same quotation and date rules. */
 export function readZoteroLocale(): string {
   const profile = locateZoteroProfileDir();

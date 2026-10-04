@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const testFiles = ["csl-sync.test.ts", "issue6-regression.test.ts", "live-word-export.test.ts"];
+const testFiles = ["csl-sync.test.ts", "issue6-regression.test.ts", "live-word-export.test.ts", "footnote-clipboard.test.ts", "citation-locator.test.ts", "compact-locator.test.ts", "citation-commentary.test.ts", "footnote-navigation.test.ts", "footnote-ui.test.ts", "all-fixes-regression.test.ts"];
 const outfiles = testFiles.map((_, index) =>
   path.join(os.tmpdir(), `zotero-citations-tests-${process.pid}-${index}.cjs`)
 );
@@ -27,6 +27,14 @@ try {
       plugins: [{
         name: "obsidian-stub",
         setup(build) {
+          build.onResolve({ filter: /^test-footnote-extension$/ }, () => ({
+            path: path.join(root, "src", "extensions", "FootnoteExtension.ts"),
+            namespace: "locator-test",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "locator-test" }, ({ path: file }) => ({
+            contents: fs.readFileSync(file, "utf8") + "\nexport { applyLocatorEdit, replaceInSourceView, mountLocatorEditor };",
+            loader: "ts", resolveDir: path.dirname(file),
+          }));
           build.onResolve({ filter: /^obsidian$/ }, () => ({
             path: path.join(root, "tests", "obsidian-stub.js"),
           }));

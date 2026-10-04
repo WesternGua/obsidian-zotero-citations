@@ -42,8 +42,20 @@ no extra release asset is required for the Lua source.
 
 The vendored filter contains deliberate local patches in addition to the
 removed online update check. They preserve UTF-8 byte encoding for custom CSL
-style URIs and make Better BibTeX lookup failures abort the export. Preserve or
+style URIs, all locator types and timestamps, Unicode dash ranges, and make
+Better BibTeX lookup failures abort the export. The configured connection port
+is inserted into a temporary copy of the filter. Preserve or
 reapply these patches when updating the pinned upstream filter.
+
+DOM tests use Node jsdom and markdown-it, with a test-only renderer. Set
+`ZOTERO_CITATIONS_DOM_TEST_RUNTIME` to a directory whose `node_modules`
+contains those packages before running `npm test`. This exercises locator chips
+and issue navigation without invoking Obsidian or another plugin's renderer.
+The CodeMirror state tests also verify issue decorations and offset mapping.
+
+For vault tests, create dedicated new Markdown notes through Obsidian CLI.
+Do not test edits or Markdown rendering on existing user documents. Reload only
+Zotero Citations, and do not change any other plugin or overwrite `data.json`.
 
 After rebuilding, reload the plugin in Obsidian:
 
@@ -64,6 +76,7 @@ Likewise, `data.json` is local runtime state and should stay untracked. In contr
 
 ## Release Metadata
 
+- 0.3.0 consolidates the unpublished 0.2.10 and 0.2.11 work. Neither receives a separate release entry.
 - `manifest.json` stores the plugin version and minimum Obsidian version.
 - `versions.json` maps each released plugin version to its minimum compatible Obsidian version.
 - `npm version <patch|minor|major>` can use `version-bump.mjs` to keep `manifest.json` and `versions.json` in sync.

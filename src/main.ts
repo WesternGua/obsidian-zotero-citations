@@ -7,10 +7,13 @@ import { CitationManager, EndnoteDef, InTextCitation, InlineCitation, MinimalEdi
 import { CslEngine } from "./CslEngine";
 import { ExportManager } from "./ExportManager";
 import { createFootnoteExtension } from "./extensions/FootnoteExtension";
+import { readingFootnoteClick, readingFootnoteDoubleClick } from "./extensions/FootnoteNavigation";
+import { createFootnoteClipboardExtension, handleFootnotePaste } from "./extensions/FootnoteClipboardExtension";
 import { appT, I18nValue, t } from "./i18n";
 import { ExportModal } from "./modals/ExportModal";
 import { PreferencesModal } from "./modals/PreferencesModal";
-import { SearchModal } from "./modals/SearchModal";
+import { CitationIssueNavigator, captureCitationIssueOrigin, type CitationIssueOrigin, createCitationIssueExtension } from "./extensions/CitationIssues";
+import type { CitationIssue } from "./CitationManager";
 import { DEFAULT_SETTINGS, syncInstalledStyles, ZoteroCitationsSettings, ZoteroSettingTab } from "./settings";
 import {
   CaywResult,
@@ -20,6 +23,7 @@ import {
   ZoteroItem,
   ZoteroPickerError,
 } from "./ZoteroAPI";
+import { parseLocator } from "./Locator";
 
 type EditorLike = MinimalEditor & obsidian.Editor & { cm?: { focus?: () => void } };
 
@@ -86,6 +90,7 @@ const ZOTERO_UNLINK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 </svg>`;
 
 export default class ZoteroCitations extends obsidian.Plugin {
+  issueNavigator: CitationIssueNavigator | null = null;
   api!: ZoteroAPI;
   settings!: ZoteroCitationsSettings;
   itemCache: Map<string, ZoteroItem> = new Map();
@@ -138,7 +143,18 @@ export default class ZoteroCitations extends obsidian.Plugin {
       getSourcePath: () => this.app.workspace.getActiveFile()?.path ?? "",
     });
     this.registerEditorExtension(this.editorExtension);
-    this.registerMarkdownPostProcessor((el) => this.decorateRenderedFootnotes(el));
+    this.registerEditorExtension(createFootnoteClipboardExtension());
+    this.registerEditorExtension(createCitationIssueExtension());
+    this.registerEvent(this.app.workspace.on("editor-paste", (event, editor) => {
+      handleFootnotePaste(event, editor);
+    }));
+    this.registerMarkdownPostProcessor((el) => {
+      this.decorateRenderedFootnotes(el);
+      // Standard previews may attach the processed section after this callback.
+      if (!el.isConnected) requestAnimationFrame(() => this.decorateRenderedFootnotes(el));
+    });
+    this.registerDomEvent(document,"click",readingFootnoteClick,true);
+    this.registerDomEvent(document,"dblclick",readingFootnoteDoubleClick,true);
 
     const commandLabels = this.getCommandLabels();
     this.addCommand({
@@ -196,6 +212,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   onunload() {
+    this.issueNavigator?.dispose();
     if (this.focusBurstTimer) window.clearInterval(this.focusBurstTimer);
     if (this.focusBurstStopTimer) window.clearTimeout(this.focusBurstStopTimer);
     if (this.focusBurstTopmostResetTimer) window.clearTimeout(this.focusBurstTopmostResetTimer);
@@ -435,6 +452,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
     const existingInText = CitationManager.isInsideInText(content, pos);
     const sourcePath = this.app.workspace.getActiveFile()?.path || null;
     const selectionSnapshot = this.captureEditorSelection(editor);
+    const originalItems = new Map(this.itemCache);
     const notice = new obsidian.Notice(this.t("notice.openPicker"), 0);
 
     let items: CaywResult[];
@@ -461,10 +479,26 @@ export default class ZoteroCitations extends obsidian.Plugin {
       return;
     }
 
+    // A picker can outlive edits, tab changes or synchronization. Never reuse stale offsets.
+    if (editor.getValue() !== content || targetEditor.getValue() !== content || this.app.workspace.getActiveFile()?.path !== sourcePath) {
+      new obsidian.Notice(this.t("notice.operationChanged"),7000);
+      return;
+    }
+    const existing = existingInline || existingEndnote || existingInText;
+    if (existing && !existing.fullMatch.includes("<!-- /zotero-citation -->")) {
+      const missing = existing.entries.filter(entry=>!originalItems.has(entry.key)).map(entry=>entry.key);
+      if (missing.length) {
+        try {const fetched = await this.api.getItemsByKeys(missing);for(const [key,item] of fetched)originalItems.set(key,item);}
+        catch(error){new obsidian.Notice(this.t("notice.fetchItemsFailed",{error:String(error)}),7000);return;}
+      }
+      if (editor.getValue() !== content || targetEditor.getValue() !== content || this.app.workspace.getActiveFile()?.path !== sourcePath) {
+        new obsidian.Notice(this.t("notice.operationChanged"),7000);return;
+      }
+    }
     for (const ci of items) this.cacheItem(ci.item);
     this.restoreEditorSelection(targetEditor, selectionSnapshot);
     try {
-      this.applySelectedCitations(targetEditor, items, existingInline, existingEndnote, existingInText);
+      this.applySelectedCitations(targetEditor, items, existingInline, existingEndnote, existingInText, originalItems);
     } catch (error) {
       new obsidian.Notice(this.t("notice.styleFormatFailed", { error: String(error) }), 8000);
     }
@@ -519,6 +553,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
   // ── Refresh all ───────────────────────────────────────────────────────────
   async refreshAll(editor: EditorLike): Promise<void> {
     if (!this.ensureInstalledStyle()) return;
+    const sourcePath = this.app.workspace.getActiveFile()?.path || "";
     const removedOrphans = CitationManager.removeUnreferencedEndnotes(editor);
     const content = editor.getValue();
     const all = CitationManager.parseAllCitations(content);
@@ -539,23 +574,30 @@ export default class ZoteroCitations extends obsidian.Plugin {
     }
 
     const notice = new obsidian.Notice(this.t("notice.refreshing"), 0);
+    const originalItems = new Map(all.map(c => [c.key,this.getCached(c.key)]).filter((pair): pair is [string,ZoteroItem] => !!pair[1]));
     try {
       const keys = [...new Set(all.map((c) => c.key))];
       const fetched = await this.api.getItemsByKeys(keys);
+      if ((this.app.workspace.getActiveFile()?.path || "") !== sourcePath) {notice.hide();new obsidian.Notice(this.t("notice.operationChanged"),7000);return;}
       for (const [k, v] of fetched) this.cacheItem(v.key ? v : { ...v, key: k });
 
       const itemMap = new Map<string, ZoteroItem>();
       for (const key of keys) {
-        const item = fetched.get(key) ?? this.getCached(key);
+        const item = fetched.get(key);
         if (item) itemMap.set(key, item);
       }
 
       notice.hide();
+      const origin = captureCitationIssueOrigin(editor);
       const style = this.settings.cslStyle;
       let count = 0;
-      count += CitationManager.refreshInline(editor, itemMap, style);
-      count += CitationManager.refreshEndnotes(editor, itemMap, style);
-      count += CitationManager.refreshInText(editor, itemMap, style);
+      const issues: CitationIssue[] = [];
+      const onIssue = (issue:CitationIssue) => issues.push(issue);
+      const boundaryItems = new Map([...itemMap,...originalItems]);
+      count += CitationManager.refreshInline(editor, itemMap, style, boundaryItems, undefined, onIssue);
+      count += CitationManager.refreshEndnotes(editor, itemMap, style, boundaryItems, undefined, onIssue);
+      count += CitationManager.refreshInText(editor, itemMap, style, boundaryItems, undefined, onIssue);
+
 
       const newContent = editor.getValue();
       if (newContent.includes("<!-- zotero-bibliography-start -->")) {
@@ -570,7 +612,8 @@ export default class ZoteroCitations extends obsidian.Plugin {
       }
 
       const extra = removedOrphans ? this.t("notice.refreshed.extraOrphans", { count: removedOrphans }) : "";
-      new obsidian.Notice(this.t("notice.refreshed", { count, extra }));
+      if (issues.length) this.showCitationIssues(editor,issues,count,origin);
+      else {this.issueNavigator?.dispose();this.issueNavigator=null;new obsidian.Notice(this.t("notice.refreshed", { count, extra }));}
     } catch (err) {
       notice.hide();
       if (err instanceof ZoteroConnectionError) {
@@ -579,6 +622,13 @@ export default class ZoteroCitations extends obsidian.Plugin {
         new obsidian.Notice(this.t("notice.refreshFailed", { error: String(err) }), 5000);
       }
     }
+  }
+
+  showCitationIssues(editor: MinimalEditor, issues: CitationIssue[], count: number, origin?:CitationIssueOrigin): void {
+    if (!issues.length) return;
+    if (typeof document === "undefined") return;
+    this.issueNavigator?.dispose();
+    this.issueNavigator = new CitationIssueNavigator(this.app,editor,issues,count,origin);
   }
 
   // ── Export to Word ────────────────────────────────────────────────────────
@@ -657,44 +707,9 @@ export default class ZoteroCitations extends obsidian.Plugin {
       },
       refreshEditorExtension: () => this.refreshEditorExtension(),
       getEditor: () => this.getEditor(),
+      onIssues: (editor,issues,count)=>this.showCitationIssues(editor,issues,count),
       getItemFromCache: (k) => this.getCached(k),
       fetchAndCacheItem: (k) => this.fetchAndCache(k),
-    }).open();
-  }
-
-  openSearchFallback(
-    editor: EditorLike,
-    existingInlinePage?: string,
-    existingEndnotePage?: string,
-    existingInTextPage?: string,
-    existingInline: InlineCitation | null = CitationManager.isInsideInline(
-      editor.getValue(),
-      editor.posToOffset(editor.getCursor()),
-    ),
-    existingEndnote: EndnoteDef | null = CitationManager.isInsideEndnoteRef(
-      editor.getValue(),
-      editor.posToOffset(editor.getCursor()),
-    ),
-    existingInText: InTextCitation | null = CitationManager.isInsideInText(
-      editor.getValue(),
-      editor.posToOffset(editor.getCursor()),
-    ),
-  ) {
-    const existingPage = existingInlinePage || existingEndnotePage || existingInTextPage;
-    new SearchModal(this.app, {
-      api: this.api,
-      style: this.settings.cslStyle,
-      existingPage: this.toEditableLocator(existingPage),
-      onConfirm: (item, page) => {
-        this.cacheItem(item);
-        this.applySelectedCitations(
-          editor,
-          [{ item, locator: page || undefined, locatorLabel: "page" }],
-          existingInline,
-          existingEndnote,
-          existingInText,
-        );
-      },
     }).open();
   }
 
@@ -713,6 +728,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
       editor.getValue(),
       editor.posToOffset(editor.getCursor()),
     ),
+    originalItems = new Map(this.itemCache),
   ) {
     const style = this.settings.cslStyle;
     const mode = this.settings.citationMode;
@@ -722,17 +738,17 @@ export default class ZoteroCitations extends obsidian.Plugin {
     }));
 
     if (existingInline) {
-      CitationManager.replaceInlineGroup(editor, existingInline, selected, style);
+      CitationManager.replaceInlineGroup(editor, existingInline, selected, style, originalItems);
       new obsidian.Notice(this.t("notice.citationUpdated"));
       return;
     }
     if (existingEndnote) {
-      CitationManager.replaceEndnoteDefGroup(editor, existingEndnote, selected, style);
+      CitationManager.replaceEndnoteDefGroup(editor, existingEndnote, selected, style, originalItems);
       new obsidian.Notice(this.t("notice.citationUpdated"));
       return;
     }
     if (existingInText) {
-      CitationManager.replaceInTextGroup(editor, existingInText, selected, style);
+      CitationManager.replaceInTextGroup(editor, existingInText, selected, style, originalItems);
       new obsidian.Notice(this.t("notice.citationUpdated"));
       return;
     }
@@ -870,6 +886,16 @@ export default class ZoteroCitations extends obsidian.Plugin {
   }
 
   decorateRenderedFootnotes(root: HTMLElement) {
+    if (!root.closest(".markdown-reading-view")) return;
+    root.querySelectorAll<HTMLElement>(".footnotes ol > li").forEach((item,index) => {
+      if (item.querySelector(".zotero-footnote-definition-number")) return;
+      item.classList.add("zotero-navigable-footnote");
+      const number = item.ownerDocument.createElement("span");
+      number.className = "zotero-footnote-definition-number";
+      number.textContent = "[" + (item.getAttribute("value") || String(index+1)) + "] ";
+      number.title = this.t("footnote.jumpBack");
+      item.prepend(number);
+    });
     if (!this.settings.showWordStyleFootnotes) return;
     const refs = root.querySelectorAll("a.footnote-ref, a[data-footnote-ref]");
     refs.forEach((refEl) => {
@@ -922,7 +948,7 @@ export default class ZoteroCitations extends obsidian.Plugin {
 
   toEditableLocator(locator?: string) {
     if (!locator) return locator;
-    return locator.replace(/^(p\.|para\.|sec\.|ch\.|fig\.|table|v\.|l\.|n\.|col\.|no\.|vol\.)\s+/i, "");
+    return parseLocator(locator).value;
   }
 }
 

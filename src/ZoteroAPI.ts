@@ -108,7 +108,7 @@ const LOCATOR_PREFIX: Record<string, string> = {
 
 export function formatLocator(locator?: string, label?: string): string {
   if (!locator) return "";
-  const prefix = LOCATOR_PREFIX[label ?? "page"] ?? "";
+  const prefix = LOCATOR_PREFIX[label ?? "page"] ?? label ?? "p.";
   return prefix ? `${prefix} ${locator}` : locator;
 }
 

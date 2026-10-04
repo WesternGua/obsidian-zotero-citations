@@ -8,6 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { ZoteroItem } from "./ZoteroAPI";
+import { parseLocator } from "./Locator";
 import { locateZoteroStylesDir, readZoteroIncludePaperArticleUrls, readZoteroLocale } from "./ZoteroEnvironment";
 
 const CSL: any = require("citeproc");
@@ -68,6 +69,17 @@ export class CslEngine {
     return CslEngine.configuredLocale;
   }
 
+  static installedStyleIds(): string[] {
+    try {
+      const directory = CslEngine.configuredStylesDir || locateZoteroStylesDir();
+      if (!directory) return [];
+      return fs.readdirSync(directory).filter(file => file.endsWith(".csl")).map(file => {
+        const xml = fs.readFileSync(path.join(directory,file),"utf8");
+        return CslEngine.extractStyleId(xml) || file.slice(0,-4);
+      });
+    } catch { return []; }
+  }
+
   static canFormat(styleId: string): boolean {
     if (!styleId) return false;
     try {
@@ -114,6 +126,56 @@ export class CslEngine {
 
   static formatNoteText(item: ZoteroItem, styleId: string, page?: string): string | null {
     return CslEngine.formatNoteCluster([{ item, page }], styleId);
+  }
+
+  /** Preview-only markers identify locator variables, never matching visible numbers. */
+  static formatLocatorPreview(entries: CslCitationInput[], styleId: string, inText = false): { markdown: string; plain: string } | null {
+    const start = (index: number) => "\uE000zl:" + index + "\uE001";
+    const end = "\uE000/zl\uE001";
+    const entryEnd = (index: number) => "\uE000ze:" + index + "\uE001";
+    try {
+      let markdown: string;
+      if (!inText && CslEngine.isNumericStyle(styleId)) {
+        const bibliography = CslEngine.formatBibliography(entries.map(entry => entry.item), styleId);
+        if (!bibliography) return null;
+        markdown = entries.map((entry, index) => {
+          const formatted = bibliography.get(entry.item.key);
+          if (!formatted) throw new Error("Missing bibliography entry");
+          let text = CslEngine.stripNumericBibliographyLabel(formatted);
+          if (entry.page) {
+            const citation = CslEngine.formatCitationText(entry.item, styleId, entry.page);
+            const locator = citation ? CslEngine.extractNumericLocator(citation) : null;
+            if (locator) text = CslEngine.appendLocator(text, start(index) + locator + end);
+          }
+          return text + entryEnd(index);
+        }).join("; ");
+      } else {
+        const style = CslEngine.loadStyle(styleId);
+        if (!style) return null;
+        const store: Record<string, unknown> = {};
+        // Unique preview IDs keep repeated occurrences independently editable.
+        // If that affects CSL output, the caller uses compact fallback controls.
+        const citationItems = entries.map((entry, index) => {
+          const id = "zotero-preview-" + index;
+          store[id] = { ...CslEngine.toCsl(entry.item), id };
+          const locator = CslEngine.parseLocator(entry.page);
+          return locator ? { id, locator: locator.value, label: locator.label } : { id };
+        });
+        const indexOf = (id: string) => Number(id.slice("zotero-preview-".length));
+        const engine = new CSL.Engine({
+          retrieveLocale: (locale: string) => CslEngine.getLocaleData(locale || style.locale),
+          retrieveItem: (id: string) => store[id],
+          variableWrapper: (params: any, pre: string, text: string, post: string) =>
+            params.variableNames.includes("locator")
+              ? pre + start(indexOf(String(params.itemData.id))) + text + end + post
+              : pre + text + (params.variableNames.includes("title") ? entryEnd(indexOf(String(params.itemData.id))) : "") + post,
+        }, style.xml, style.locale);
+        engine.updateItems(Object.keys(store));
+        markdown = CslEngine.htmlToMarkdown(engine.previewCitationCluster({ citationItems, properties: { noteIndex: 1 } }, [], [], "html"));
+      }
+      const plain = markdown.replace(/\uE000(?:zl:\d+|\/zl|ze:\d+)\uE001/g, "");
+      return { markdown, plain };
+    } catch { return null; }
   }
 
   static formatNoteCluster(entries: CslCitationInput[], styleId: string): string | null {
@@ -355,24 +417,7 @@ export class CslEngine {
   private static parseLocator(page?: string): { label: string; value: string } | null {
     const raw = page?.trim();
     if (!raw) return null;
-    const prefixes: Array<[RegExp, string]> = [
-      [/^p(?:p)?\.\s*/i, "page"],
-      [/^para\.\s*/i, "paragraph"],
-      [/^sec\.\s*/i, "section"],
-      [/^ch\.\s*/i, "chapter"],
-      [/^fig\.\s*/i, "figure"],
-      [/^table\s*/i, "table"],
-      [/^v\.\s*/i, "verse"],
-      [/^l\.\s*/i, "line"],
-      [/^n\.\s*/i, "note"],
-      [/^col\.\s*/i, "column"],
-      [/^no\.\s*/i, "issue"],
-      [/^vol\.\s*/i, "volume"],
-    ];
-    for (const [pattern, label] of prefixes) {
-      if (pattern.test(raw)) return { label, value: raw.replace(pattern, "").trim() };
-    }
-    return { label: "page", value: raw };
+    return parseLocator(raw);
   }
 
   private static stripNumericBibliographyLabel(text: string): string {

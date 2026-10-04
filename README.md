@@ -8,12 +8,13 @@
 
 ## Highlights
 
-- **Insert citations** — Invokes Zotero's native citation picker or an in-plugin search modal, with support for page/paragraph locators
+- **Insert citations** — Invokes Zotero's native citation picker, with support for page/paragraph locators
 - **Footnote / endnote / in-text** — Freely switch between footnote mode (`^[citation text]`), endnote mode (`[^1]` + endnote definitions), and in-text mode (plain-text author-year citations)
 - **Word-style display** — Footnote markers render as superscript numbers in the editor; hover to preview the full citation and edit locators
 - **Zotero-only CSL styles** — Shows and uses only styles currently installed in Zotero; there are no built-in or approximate fallback styles
 - **Matching CSL output** — Uses Zotero's style files and locale rules, including dependent styles, bibliography sorting, and citation clusters
 - **Bibliography** — Auto-generates a formatted reference list from all citations in the current document
+- **Copy with footnotes** — Normal copy/paste transfers complete footnote definitions, resolves label conflicts, and preserves Zotero metadata
 - **Export to Word** — Uses Pandoc and a bundled Better BibTeX Lua filter to create `.docx` files whose footnote, endnote, and in-text citations remain live Zotero fields that can be refreshed and restyled
 - **Bilingual UI** — Switch between Chinese and English in settings
 
@@ -65,7 +66,9 @@ This version has been developed and tested primarily on **macOS**. Linux and Win
 
 Search for `Insert citation` in the command palette, or click the citation icon in the title bar.
 
-The plugin will first try to open Zotero's native citation picker — search for items, add a page number or other locator, and confirm with the checkmark button.
+The plugin opens Zotero's native citation picker — search for items, add a page number or other locator, and confirm with the checkmark button.
+
+A connection or Better BibTeX CAYW error is reported directly; there is no in-plugin fallback picker.
 
 Inserted citations follow your current citation mode setting (footnote, endnote, or in-text).
 
@@ -78,6 +81,8 @@ Inserted citations follow your current citation mode setting (footnote, endnote,
 ### 2. Hover to Edit Locators
 
 With Word-style footnote display enabled, hover over a superscript number to preview the full citation and edit the page/paragraph locator directly:
+
+Locator values have a small border directly inside the citation preview. Click a value to edit its type and number or range in place. The type menu matches Zotero's locator names and ordering. Press Enter to save or Esc to cancel. References without a visible locator have a compact add/edit control. Hover a control to see its reference title. Each occurrence remains independent, and saving preserves the current cursor and reading position. Clear the number to remove only that reference's locator.
 
 ![en-hover-preview](assets/screenshots/en-hover-preview.png)
 
@@ -109,6 +114,24 @@ Body text is SimSun 12pt, 1.5 line spacing, justified alignment, first-line inde
 
 ## Settings
 
+### Refresh, comments and issue handling (0.3.0)
+
+Write commentary after the generated citation. An invisible `<!-- /zotero-citation -->` boundary separates generated text from your commentary, which is preserved by refresh, locator edits and Word export. Existing citations without a boundary are migrated only when their generated prefix can be confirmed; uncertain citations remain unchanged.
+
+Double-click a body footnote marker to jump to its definition. Double-click the definition number to return to the last originating occurrence, or the first reference if no origin is recorded.
+
+Refresh updates normal citations and preserves entire groups with missing items or damaged metadata. It highlights the first issue and shows an upper-right panel with the updated count, issue list, previous/next controls and return to the previous location. Mode conversion retains grouped items and comments. A multi-paragraph footnote remains unchanged if the destination inline format cannot preserve its paragraphs, and the panel explains the limitation.
+
+The Zotero port in settings defaults to `23119`. Word export uses that same setting; change it only when your Zotero/Better BibTeX endpoint uses a different port.
+
+### Copy and paste with footnotes
+
+In Source mode or Live Preview, select a passage containing complete `[^label]` markers and copy/paste normally (`Cmd+C` / `Cmd+V` on macOS). Referenced definitions are collected from the current editor, including unsaved edits. The body replaces the destination selection and new definitions are inserted at the end of the note, before a plugin-managed bibliography if present. Conflicting labels are renamed together with their references. An existing definition with exactly the same content can be reused, including a definition renamed by an earlier paste. Definitions already included in the selection are transferred once.
+
+Ordinary footnotes, multiline definitions, repeated references, and grouped Zotero citations are supported. Original formatting, Zotero item keys, locators, and comments are preserved. Transfer does not contact Zotero or reformat citations. One undo reverses both body and definition insertion. The clipboard includes a custom payload and self-contained Markdown as a fallback when clipboard managers remove custom formats. Text pasted into other applications also includes referenced definitions.
+
+The feature handles one continuous editor selection, independently of citation mode and Word-style display. Reading view, cut, multiple selections, code examples, partial definitions, and pasting inside definitions or code blocks retain native behavior. Inline `^[content]` notes already include their content and retain native copy behavior. Windows/Linux shortcuts are `Ctrl+C` / `Ctrl+V`; those platforms remain unvalidated.
+
 ![en-settings](assets/screenshots/en-settings.png)
 
 ![en-settings-2](assets/screenshots/en-settings-2.png)
@@ -118,6 +141,7 @@ Body text is SimSun 12pt, 1.5 line spacing, justified alignment, first-line inde
 | Setting | Description |
 |---------|-------------|
 | Interface language | Chinese / English |
+| Zotero port | Local Zotero/Better BibTeX port, default `23119`; also used for Word export |
 | Default CSL style | Format used for newly inserted citations |
 | Citation mode | Footnote / Endnote / In-text |
 | Word-style footnote display | Superscript numbers + hover preview |

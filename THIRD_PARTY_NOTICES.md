@@ -32,7 +32,11 @@ The upstream online update check was removed from the vendored copy so Word
 exports remain local-only. Local patches also encode non-ASCII CSL style URIs
 byte-for-byte for Pandoc's Lua runtime and make unresolved Better BibTeX items
 fail the export instead of falling back to plain citation-key text. The
-filter's MIT license notice is retained in the vendored source.
+filter's MIT license notice is retained in the vendored source. The locator
+parser also supports all 27 Zotero locator types, preserves complete timestamps,
+and recognizes the plugin's existing chapter and issue prefixes. It matches
+Unicode en/em dash ranges as complete UTF-8 sequences. Export preparation
+injects the configured Zotero port into a temporary filter copy.
 
 ## Test-only CSL styles
 

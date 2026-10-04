@@ -4,6 +4,8 @@
  */
 import { ZoteroItem } from "./ZoteroAPI";
 import { CslEngine } from "./CslEngine";
+import { CITATION_END, citationBody, resolveCitationContent, visibleCitation, CitationBoundaryError } from "./CitationContent";
+import { parseFootnoteDocument, markdownCitationMask, footnoteKey } from "./FootnoteClipboard";
 
 // ── Editor interface (subset of Obsidian's Editor) ────────────────────────
 export interface EditorPosition {
@@ -69,7 +71,12 @@ export interface CitationEntry {
   key: string;
   page: string;
   formattedText: string;
+  error?: string;
 }
+
+export type CitationKind = "endnote" | "inline" | "intext";
+export interface CitationIssue { kind: CitationKind; label?: string; key: string; from: number; to: number; original: string; reason: "encoding" | "missing" | "boundary" | "multiline"; }
+export type CitationIssueHandler = (issue: CitationIssue) => void;
 
 export interface CitationInsertEntry {
   item: ZoteroItem;
@@ -83,6 +90,12 @@ const ENDNOTE_DEF_RE_SRC = `^\\[\\^([^\\]\\n]+)\\]:\\s*(<!-- zotero:${KEY_PAT}:[
 const IN_TEXT_LEGACY_RE_SRC = `<!-- zotero-inline:(${KEY_PAT}):([^ ]*) -->\\s*([\\s\\S]*?)\\s*<!-- \\/zotero-inline -->`;
 const BIBLIOGRAPHY_START = "<!-- zotero-bibliography-start -->";
 const BIBLIOGRAPHY_END = "<!-- zotero-bibliography-end -->";
+
+export class CitationChangedError extends Error { constructor() { super("The citation changed while the operation was pending. Original text was preserved."); } }
+
+function safeDecodeLocator(raw: string): {value:string;error?:string} {
+  try { return {value:decodeURIComponent(raw)}; } catch { return {value:raw,error:"Invalid locator encoding"}; }
+}
 
 export class EngineUnavailableError extends Error {
   constructor(public readonly styleId: string) {
@@ -100,11 +113,12 @@ export class CitationManager {
   static parseInlineCitations(content: string): InlineCitation[] {
     const results: InlineCitation[] = [];
     const startRe = new RegExp(`\\^\\[<!-- zotero:(${KEY_PAT}):([^ ]*) --> `, "g");
+    const mask = markdownCitationMask(content);
     let m: RegExpExecArray | null;
-    while ((m = startRe.exec(content)) !== null) {
+    while ((m = startRe.exec(mask)) !== null) {
       const index = m.index;
       const key = m[1];
-      const page = decodeURIComponent(m[2]);
+      const page = safeDecodeLocator(m[2]).value;
       const bodyStart = index + m[0].length;
       let pos = bodyStart;
       let depth = 0;
@@ -146,19 +160,18 @@ export class CitationManager {
 
   static parseEndnoteDefs(content: string): EndnoteDef[] {
     const results: EndnoteDef[] = [];
-    const re = new RegExp(ENDNOTE_DEF_RE_SRC, "gm");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-      const entries = CitationManager.parseZoteroEntries(m[2], "zotero");
+    for (const definition of parseFootnoteDocument(content).definitions) {
+      const body = citationBody(definition.raw,"endnote");
+      const entries = CitationManager.parseZoteroEntries(body, "zotero");
       if (!entries.length) continue;
       results.push({
-        label: m[1],
+        label: definition.label,
         key: entries[0].key,
         page: entries[0].page,
-        formattedText: CitationManager.stripCitationMetadata(m[2]),
+        formattedText: CitationManager.stripCitationMetadata(body),
         entries,
-        fullMatch: m[0],
-        defIndex: m.index,
+        fullMatch: definition.raw,
+        defIndex: definition.from,
       });
     }
     return results;
@@ -175,7 +188,7 @@ export class CitationManager {
         }
       }
     }
-    for (const c of CitationManager.parseEndnoteRefs(content)) {
+    for (const c of CitationManager.parseEndnoteDefs(content)) {
       for (const entry of c.entries.length ? c.entries : [{ key: c.key, page: c.page, formattedText: c.formattedText }]) {
         if (!seen.has(entry.key)) {
           seen.add(entry.key);
@@ -205,11 +218,12 @@ export class CitationManager {
   static parseInTextCitations(content: string): InTextCitation[] {
     const results: InTextCitation[] = [];
     const startRe = new RegExp(`\\^\\[<!-- zotero-intext:(${KEY_PAT}):([^ ]*) --> `, "g");
+    const mask = markdownCitationMask(content);
     let m: RegExpExecArray | null;
-    while ((m = startRe.exec(content)) !== null) {
+    while ((m = startRe.exec(mask)) !== null) {
       const index = m.index;
       const key = m[1];
-      const page = decodeURIComponent(m[2]);
+      const page = safeDecodeLocator(m[2]).value;
       const bodyStart = index + m[0].length;
       let pos = bodyStart;
       let depth = 0;
@@ -249,11 +263,12 @@ export class CitationManager {
 
     const legacyRe = new RegExp(IN_TEXT_LEGACY_RE_SRC, "g");
     while ((m = legacyRe.exec(content)) !== null) {
+      if (mask.slice(m.index,m.index+4) !== "<!--") continue;
       results.push({
         key: m[1],
-        page: decodeURIComponent(m[2]),
+        page: safeDecodeLocator(m[2]).value,
         formattedText: m[3],
-        entries: [{ key: m[1], page: decodeURIComponent(m[2]), formattedText: m[3] }],
+        entries: [{ key: m[1], page: safeDecodeLocator(m[2]).value, ...(safeDecodeLocator(m[2]).error ? {error:safeDecodeLocator(m[2]).error}:{}), formattedText: m[3] }],
         fullMatch: m[0],
         index: m.index,
       });
@@ -264,27 +279,12 @@ export class CitationManager {
   }
 
   static parseEndnoteRefs(content: string): EndnoteRef[] {
-    const defs = new Map<string, EndnoteDef>(
-      CitationManager.parseEndnoteDefs(content).map((d) => [d.label, d])
-    );
-    const refs: EndnoteRef[] = [];
-    const re = /\[\^([^\]\n]+)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-      if (content[m.index + m[0].length] === ":") continue;
-      const def = defs.get(m[1]);
-      if (!def) continue;
-      refs.push({
-        label: m[1],
-        key: def.key,
-        page: def.page,
-        formattedText: def.formattedText,
-        entries: def.entries,
-        fullMatch: m[0],
-        index: m.index,
-      });
-    }
-    return refs;
+    const document = parseFootnoteDocument(content);
+    const defs = new Map(CitationManager.parseEndnoteDefs(content).map(d=>[footnoteKey(d.label),d]));
+    return document.references.filter(ref=>!document.definitions.some(def=>ref.from>=def.from&&ref.to<=def.to)).flatMap(ref=>{
+      const def=defs.get(footnoteKey(ref.label));
+      return def ? [{label:def.label,key:def.key,page:def.page,formattedText:def.formattedText,entries:def.entries,fullMatch:content.slice(ref.from,ref.to),index:ref.from}] : [];
+    });
   }
 
   static isInsideInline(content: string, pos: number): InlineCitation | null {
@@ -295,16 +295,8 @@ export class CitationManager {
   }
 
   static isInsideEndnoteRef(content: string, pos: number): EndnoteDef | null {
-    const defs = new Map<string, EndnoteDef>(
-      CitationManager.parseEndnoteDefs(content).map((d) => [d.label, d])
-    );
-    const re = /\[\^(\d+)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-      if (content[m.index + m[0].length] === ":") continue;
-      if (pos > m.index && pos < m.index + m[0].length) return defs.get(m[1]) ?? null;
-    }
-    return null;
+    const ref = CitationManager.parseEndnoteRefs(content).find(ref=>pos>ref.index&&pos<ref.index+ref.fullMatch.length);
+    return ref ? CitationManager.parseEndnoteDefs(content).find(def=>footnoteKey(def.label)===footnoteKey(ref.label)) || null : null;
   }
 
   static isInsideInText(content: string, pos: number): InTextCitation | null {
@@ -315,16 +307,18 @@ export class CitationManager {
   }
 
   static parseZoteroEntries(text: string, marker: "zotero" | "zotero-intext" = "zotero"): CitationEntry[] {
+    text = text.split(CITATION_END)[0];
     const results: CitationEntry[] = [];
     const re = new RegExp(`<!--\\s*${marker}:(${KEY_PAT}):([^ ]*)\\s*-->\\s*`, "g");
-    const matches: { index: number; end: number; key: string; page: string }[] = [];
+    const matches: { index: number; end: number; key: string; page: string; error?: string }[] = [];
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       matches.push({
         index: m.index,
         end: re.lastIndex,
         key: m[1],
-        page: decodeURIComponent(m[2] || ""),
+        page: safeDecodeLocator(m[2] || "").value,
+        error: safeDecodeLocator(m[2] || "").error,
       });
     }
 
@@ -335,7 +329,7 @@ export class CitationManager {
       // The plugin joins grouped citations with "; ". Keep the delimiter out of
       // the managed citation body so refresh/reformat can rebuild a clean group.
       if (next && formattedText.endsWith(";")) formattedText = formattedText.slice(0, -1).trimEnd();
-      results.push({ key: cur.key, page: cur.page, formattedText });
+      results.push({ key: cur.key, page: cur.page, formattedText, ...(cur.error ? {error:cur.error} : {}) });
     }
     return results;
   }
@@ -348,7 +342,7 @@ export class CitationManager {
       ? CslEngine.formatCitationCluster(entries, style)
       : CslEngine.formatNoteCluster(entries, style);
     if (text == null) throw new EngineUnavailableError(style);
-    return `${metadata} ${text}`;
+    return `${metadata} ${text}${CITATION_END}`;
   }
 
   private static refreshCitationEntries(
@@ -359,7 +353,7 @@ export class CitationManager {
   ): { text: string; count: number } {
     const resolved = entries.map((entry) => ({ entry, item: itemMap.get(entry.key) }));
     const available = resolved.filter((value): value is { entry: CitationEntry; item: ZoteroItem } => !!value.item);
-    if (available.length !== entries.length) {
+    if (available.length !== entries.length || entries.some(e=>e.error)) {
       const metadata = entries
         .map((entry) => `<!-- ${marker}:${entry.key}:${encodeURIComponent(entry.page ?? "")} -->`)
         .join(" ");
@@ -375,9 +369,7 @@ export class CitationManager {
   }
 
   private static stripCitationMetadata(text: string): string {
-    return text
-      .replace(new RegExp(`<!--\\s*(?:zotero|zotero-intext):${KEY_PAT}:[^ ]*\\s*-->\\s*`, "g"), "")
-      .trim();
+    return visibleCitation(text);
   }
 
   private static nextNumericEndnoteLabel(content: string): string {
@@ -473,9 +465,10 @@ export class CitationManager {
     CitationManager.replaceInlineGroup(editor, existing, [{ item, page }], style);
   }
 
-  static replaceInlineGroup(editor: MinimalEditor, existing: InlineCitation, entries: CitationInsertEntry[], style: string): void {
+  static replaceInlineGroup(editor: MinimalEditor, existing: InlineCitation, entries: CitationInsertEntry[], style: string, oldItems = new Map(entries.map(e=>[e.item.key,e.item]))): void {
+    if (editor.getValue().slice(existing.index,existing.index+existing.fullMatch.length)!==existing.fullMatch) throw new CitationChangedError();
     editor.replaceRange(
-      CitationManager.buildInlineFootnoteGroup(entries, style),
+      CitationManager.rebuildPreservingCommentary(existing.fullMatch,existing.entries,CitationManager.buildInlineFootnoteGroup(entries,style),oldItems,style,"inline"),
       editor.offsetToPos(existing.index),
       editor.offsetToPos(existing.index + existing.fullMatch.length)
     );
@@ -485,9 +478,10 @@ export class CitationManager {
     CitationManager.replaceEndnoteDefGroup(editor, existing, [{ item, page }], style);
   }
 
-  static replaceEndnoteDefGroup(editor: MinimalEditor, existing: EndnoteDef, entries: CitationInsertEntry[], style: string): void {
+  static replaceEndnoteDefGroup(editor: MinimalEditor, existing: EndnoteDef, entries: CitationInsertEntry[], style: string, oldItems = new Map(entries.map(e=>[e.item.key,e.item]))): void {
+    if (editor.getValue().slice(existing.defIndex,existing.defIndex+existing.fullMatch.length)!==existing.fullMatch) throw new CitationChangedError();
     editor.replaceRange(
-      CitationManager.buildEndnoteDefGroup(existing.label, entries, style),
+      CitationManager.rebuildPreservingCommentary(existing.fullMatch,existing.entries,CitationManager.buildEndnoteDefGroup(existing.label,entries,style),oldItems,style,"endnote"),
       editor.offsetToPos(existing.defIndex),
       editor.offsetToPos(existing.defIndex + existing.fullMatch.length)
     );
@@ -497,9 +491,10 @@ export class CitationManager {
     CitationManager.replaceInTextGroup(editor, existing, [{ item, page }], style);
   }
 
-  static replaceInTextGroup(editor: MinimalEditor, existing: InTextCitation, entries: CitationInsertEntry[], style: string): void {
+  static replaceInTextGroup(editor: MinimalEditor, existing: InTextCitation, entries: CitationInsertEntry[], style: string, oldItems = new Map(entries.map(e=>[e.item.key,e.item]))): void {
+    if (editor.getValue().slice(existing.index,existing.index+existing.fullMatch.length)!==existing.fullMatch) throw new CitationChangedError();
     editor.replaceRange(
-      CitationManager.buildInTextCitationGroup(entries, style),
+      CitationManager.rebuildPreservingCommentary(existing.fullMatch,existing.entries,CitationManager.buildInTextCitationGroup(entries,style),oldItems,style,"intext"),
       editor.offsetToPos(existing.index),
       editor.offsetToPos(existing.index + existing.fullMatch.length)
     );
@@ -509,49 +504,47 @@ export class CitationManager {
   // REFRESH
   // ════════════════════════════════════════════════════════════════════════
 
-  static refreshInline(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const citations = CitationManager.parseInlineCitations(content);
-    let count = 0;
-    for (let i = citations.length - 1; i >= 0; i--) {
-      const c = citations[i];
-      const refreshed = CitationManager.refreshCitationEntries(c.entries, itemMap, style, "zotero");
+  static rebuildPreservingCommentary(original: string, entries: CitationEntry[], replacement: string, oldItems: Map<string,ZoteroItem>, style: string, kind: string): string {
+    if (entries.some(e=>e.error)) throw new CitationBoundaryError();
+    const parts = resolveCitationContent(citationBody(original,kind),entries,oldItems,style,kind==="intext");
+    if (!parts.safe) throw new CitationBoundaryError();
+    return kind === "endnote" || !replacement.startsWith("^[") ? replacement + parts.suffix : replacement.slice(0,-1) + parts.suffix + "]";
+  }
+
+  private static issueFor(citation: InlineCitation | InTextCitation | EndnoteDef, kind: CitationKind, reason: CitationIssue["reason"]): CitationIssue {
+    const from = "defIndex" in citation ? citation.defIndex : citation.index;
+    return {kind,label:"label" in citation ? citation.label : undefined,key:citation.key,from,to:from+citation.fullMatch.length,original:citation.fullMatch,reason};
+  }
+
+  private static refreshKind(editor: MinimalEditor, itemMap: Map<string,ZoteroItem>, style: string, kind: CitationKind, oldItems: Map<string,ZoteroItem>, onUnsafe?:()=>void, onIssue?:CitationIssueHandler): number {
+    let content=editor.getValue();
+    const citations = kind === "endnote" ? CitationManager.parseEndnoteDefs(content) : kind === "inline" ? CitationManager.parseInlineCitations(content) : CitationManager.parseInTextCitations(content);
+    let count=0;
+    for (const c of [...citations].reverse()) {
+      const reason = c.entries.some(e=>e.error) ? "encoding" : c.entries.some(e=>!itemMap.has(e.key)) ? "missing" : null;
+      if (reason) {onIssue?.(CitationManager.issueFor(c,kind,reason));continue;}
+      const refreshed = CitationManager.refreshCitationEntries(c.entries,itemMap,style,kind==="intext"?"zotero-intext":"zotero");
       if (!refreshed.count) continue;
-      content = content.slice(0, c.index) + `^[${refreshed.text}]` + content.slice(c.index + c.fullMatch.length);
-      count += refreshed.count;
+      const generated = kind === "endnote" ? `[^${(c as EndnoteDef).label}]: ${refreshed.text}` : `^[${refreshed.text}]`;
+      let replacement: string;
+      try {replacement=CitationManager.rebuildPreservingCommentary(c.fullMatch,c.entries,generated,oldItems,style,kind);}
+      catch(error){if(!(error instanceof CitationBoundaryError))throw error;onUnsafe?.();onIssue?.(CitationManager.issueFor(c,kind,"boundary"));continue;}
+      const from="defIndex" in c?c.defIndex:c.index;
+      content=content.slice(0,from)+replacement+content.slice(from+c.fullMatch.length);
+      count+=refreshed.count;
     }
-    editor.setValue(content);
+    if(content!==editor.getValue())editor.setValue(content);
     return count;
   }
 
-  static refreshEndnotes(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const defs = CitationManager.parseEndnoteDefs(content);
-    let count = 0;
-    for (let i = defs.length - 1; i >= 0; i--) {
-      const d = defs[i];
-      const refreshed = CitationManager.refreshCitationEntries(d.entries, itemMap, style, "zotero");
-      if (!refreshed.count) continue;
-      content = content.slice(0, d.defIndex) + `[^${d.label}]: ${refreshed.text}` + content.slice(d.defIndex + d.fullMatch.length);
-      count += refreshed.count;
-    }
-    editor.setValue(content);
-    return count;
+  static refreshInline(editor: MinimalEditor, itemMap: Map<string,ZoteroItem>, style: string, oldItems=itemMap,onUnsafe?:()=>void,onIssue?:CitationIssueHandler):number {
+    return CitationManager.refreshKind(editor,itemMap,style,"inline",oldItems,onUnsafe,onIssue);
   }
-
-  static refreshInText(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const citations = CitationManager.parseInTextCitations(content);
-    let count = 0;
-    for (let i = citations.length - 1; i >= 0; i--) {
-      const c = citations[i];
-      const refreshed = CitationManager.refreshCitationEntries(c.entries, itemMap, style, "zotero-intext");
-      if (!refreshed.count) continue;
-      content = content.slice(0, c.index) + `^[${refreshed.text}]` + content.slice(c.index + c.fullMatch.length);
-      count += refreshed.count;
-    }
-    editor.setValue(content);
-    return count;
+  static refreshEndnotes(editor: MinimalEditor, itemMap: Map<string,ZoteroItem>, style: string, oldItems=itemMap,onUnsafe?:()=>void,onIssue?:CitationIssueHandler):number {
+    return CitationManager.refreshKind(editor,itemMap,style,"endnote",oldItems,onUnsafe,onIssue);
+  }
+  static refreshInText(editor: MinimalEditor, itemMap: Map<string,ZoteroItem>, style: string, oldItems=itemMap,onUnsafe?:()=>void,onIssue?:CitationIssueHandler):number {
+    return CitationManager.refreshKind(editor,itemMap,style,"intext",oldItems,onUnsafe,onIssue);
   }
 
   static removeUnreferencedEndnotes(editor: MinimalEditor): number {
@@ -561,7 +554,11 @@ export class CitationManager {
     let count = 0;
     for (let i = defs.length - 1; i >= 0; i--) {
       const d = defs[i];
-      if (referencedLabels.has(d.label)) continue;
+      if (referencedLabels.has(d.label) || d.entries.some(e=>e.error)) continue;
+      const body = citationBody(d.fullMatch,"endnote");
+      // An unreferenced footnote with commentary must not be deleted by refresh.
+      const boundary = body.indexOf(CITATION_END);
+      if (boundary < 0 || body.slice(boundary+CITATION_END.length).trim()) continue;
       let start = d.defIndex;
       while (start >= 2 && content[start - 1] === "\n" && content[start - 2] === "\n") start--;
       const end = d.defIndex + d.fullMatch.length;
@@ -585,168 +582,84 @@ export class CitationManager {
     return true;
   }
 
-  static convertEndnotesToInline(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const refs = CitationManager.parseEndnoteRefs(content);
-    let count = 0;
-    for (let i = refs.length - 1; i >= 0; i--) {
-      const ref = refs[i];
-      const item = itemMap.get(ref.key);
-      if (!item) continue;
-      content = content.slice(0, ref.index) + CitationManager.buildInlineFootnote(item, style, ref.page || undefined) + content.slice(ref.index + ref.fullMatch.length);
-      count++;
-    }
-    const defs = CitationManager.parseEndnoteDefs(content);
-    for (let i = defs.length - 1; i >= 0; i--) {
-      const d = defs[i];
-      let end = d.defIndex + d.fullMatch.length;
-      while (end < content.length && content[end] === "\n") end++;
-      content = content.slice(0, d.defIndex) + content.slice(end);
-    }
-    editor.setValue(content);
-    return count;
-  }
-
-  static convertEndnotesToInText(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const refs = CitationManager.parseEndnoteRefs(content);
-    let count = 0;
-    for (let i = refs.length - 1; i >= 0; i--) {
-      const ref = refs[i];
-      const item = itemMap.get(ref.key);
-      if (!item) continue;
-      content = content.slice(0, ref.index) + CitationManager.buildInTextCitation(item, style, ref.page || undefined) + content.slice(ref.index + ref.fullMatch.length);
-      count++;
-    }
-    const defs = CitationManager.parseEndnoteDefs(content);
-    for (let i = defs.length - 1; i >= 0; i--) {
-      const d = defs[i];
-      let end = d.defIndex + d.fullMatch.length;
-      while (end < content.length && content[end] === "\n") end++;
-      content = content.slice(0, d.defIndex) + content.slice(end);
-    }
-    editor.setValue(content);
-    return count;
-  }
-
-  static convertInlineToEndnotes(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const inlines = CitationManager.parseInlineCitations(content);
-    if (!inlines.length) return 0;
-    let max = 0;
-    const re = /\[\^(\d+)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) max = Math.max(max, parseInt(m[1]));
-    const labels = inlines.map((_, idx) => String(max + idx + 1));
-    for (let i = inlines.length - 1; i >= 0; i--) {
-      const c = inlines[i];
-      content = content.slice(0, c.index) + `[^${labels[i]}]` + content.slice(c.index + c.fullMatch.length);
-    }
-    const defs: string[] = [];
-    for (let i = 0; i < inlines.length; i++) {
-      const c = inlines[i];
-      const item = itemMap.get(c.key);
-      if (!item) continue;
-      defs.push(CitationManager.buildEndnoteDef(labels[i], item, style, c.page || undefined));
-    }
-    if (defs.length) {
-      const bibStart = content.indexOf(BIBLIOGRAPHY_START);
-      if (bibStart !== -1) {
-        let ins = bibStart;
-        while (ins > 0 && content[ins - 1] === "\n") ins--;
-        content = content.slice(0, ins) + "\n\n" + defs.join("\n\n") + content.slice(ins);
-      } else {
-        content += "\n\n" + defs.join("\n\n");
+  /** Generate every replacement before committing, preserving the entire group and suffix. */
+  private static convertGroups(editor: MinimalEditor, itemMap: Map<string,ZoteroItem>, style: string, source: CitationKind, target: CitationKind, oldItems=itemMap,onIssue?:CitationIssueHandler): number {
+    const content=editor.getValue();
+    const citations = source === "endnote" ? CitationManager.parseEndnoteDefs(content) : source === "inline" ? CitationManager.parseInlineCitations(content) : CitationManager.parseInTextCitations(content);
+    const refs=source==="endnote"?CitationManager.parseEndnoteRefs(content):[];
+    const edits:Array<{from:number;to:number;text:string}>=[];
+    const definitions:string[]=[];
+    const reserved = new Set([...parseFootnoteDocument(content).definitions,...parseFootnoteDocument(content).references].map(d=>footnoteKey(d.label)));
+    let next=1,count=0;
+    for(const c of citations){
+      const occurrences=source==="endnote"?refs.filter(r=>footnoteKey(r.label)===footnoteKey((c as EndnoteDef).label)):[];
+      if(source==="endnote"&&!occurrences.length)continue;
+      const reason=c.entries.some(e=>e.error)?"encoding":c.entries.some(e=>!itemMap.has(e.key))?"missing":null;
+      if(reason){onIssue?.(CitationManager.issueFor(c,source,reason));continue;}
+      const parts=resolveCitationContent(citationBody(c.fullMatch,source),c.entries,oldItems,style,source==="intext");
+      if(!parts.safe){onIssue?.(CitationManager.issueFor(c,source,"boundary"));continue;}
+      if(target!=="endnote" && /\n[ \t]*\n/.test(parts.suffix)) {onIssue?.(CitationManager.issueFor(c,source,"multiline"));continue;}
+      const selected=c.entries.map(e=>({item:itemMap.get(e.key)!,page:e.page||undefined}));
+      let generated:string;
+      if(target==="endnote"){
+        while(reserved.has(String(next)))next++;
+        const label=String(next++);reserved.add(label);
+        // Definition continuations must be indented even when their source was inline.
+        const tail=parts.suffix.replace(/\n(?!\n| {4}|\t)/g,"\n    ");
+        definitions.push(CitationManager.buildEndnoteDefGroup(label,selected,style)+tail);
+        generated=`[^${label}]`;
+      }else{
+        const built=target==="inline"?CitationManager.buildInlineFootnoteGroup(selected,style):CitationManager.buildInTextCitationGroup(selected,style);
+        generated=built.slice(0,-1)+parts.suffix+"]";
       }
+      if(source==="endnote"){
+        for(const ref of occurrences)edits.push({from:ref.index,to:ref.index+ref.fullMatch.length,text:generated});
+        const def=c as EndnoteDef;edits.push({from:def.defIndex,to:def.defIndex+def.fullMatch.length,text:""});
+      }else{const inline=c as InlineCitation;edits.push({from:inline.index,to:inline.index+inline.fullMatch.length,text:generated});}
+      count+=c.entries.length;
     }
-    editor.setValue(content);
-    return defs.length;
-  }
-
-  static convertInlineToInText(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const inlines = CitationManager.parseInlineCitations(content);
-    let count = 0;
-    for (let i = inlines.length - 1; i >= 0; i--) {
-      const c = inlines[i];
-      const item = itemMap.get(c.key);
-      if (!item) continue;
-      content = content.slice(0, c.index) + CitationManager.buildInTextCitation(item, style, c.page || undefined) + content.slice(c.index + c.fullMatch.length);
-      count++;
+    let result=content;
+    for(const edit of edits.sort((a,b)=>b.from-a.from))result=result.slice(0,edit.from)+edit.text+result.slice(edit.to);
+    if(definitions.length){
+      const bib=result.indexOf(BIBLIOGRAPHY_START);
+      let at=bib>=0?bib:result.length;
+      while(bib>=0&&at>0&&result[at-1]==="\n")at--;
+      result=result.slice(0,at)+"\n\n"+definitions.join("\n\n")+(at<result.length?"\n\n":"")+result.slice(at);
     }
-    editor.setValue(content);
+    if(result!==content)editor.setValue(result);
     return count;
   }
 
-  static convertInTextToInline(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const inText = CitationManager.parseInTextCitations(content);
-    let count = 0;
-    for (let i = inText.length - 1; i >= 0; i--) {
-      const c = inText[i];
-      const item = itemMap.get(c.key);
-      if (!item) continue;
-      content = content.slice(0, c.index) + CitationManager.buildInlineFootnote(item, style, c.page || undefined) + content.slice(c.index + c.fullMatch.length);
-      count++;
-    }
-    editor.setValue(content);
-    return count;
-  }
+  static convertEndnotesToInline(editor:MinimalEditor,items:Map<string,ZoteroItem>,style:string,oldItems=items,onIssue?:CitationIssueHandler):number{return CitationManager.convertGroups(editor,items,style,"endnote","inline",oldItems,onIssue);}
+  static convertEndnotesToInText(editor:MinimalEditor,items:Map<string,ZoteroItem>,style:string,oldItems=items,onIssue?:CitationIssueHandler):number{return CitationManager.convertGroups(editor,items,style,"endnote","intext",oldItems,onIssue);}
+  static convertInlineToEndnotes(editor:MinimalEditor,items:Map<string,ZoteroItem>,style:string,oldItems=items,onIssue?:CitationIssueHandler):number{return CitationManager.convertGroups(editor,items,style,"inline","endnote",oldItems,onIssue);}
+  static convertInlineToInText(editor:MinimalEditor,items:Map<string,ZoteroItem>,style:string,oldItems=items,onIssue?:CitationIssueHandler):number{return CitationManager.convertGroups(editor,items,style,"inline","intext",oldItems,onIssue);}
+  static convertInTextToInline(editor:MinimalEditor,items:Map<string,ZoteroItem>,style:string,oldItems=items,onIssue?:CitationIssueHandler):number{return CitationManager.convertGroups(editor,items,style,"intext","inline",oldItems,onIssue);}
+  static convertInTextToEndnotes(editor:MinimalEditor,items:Map<string,ZoteroItem>,style:string,oldItems=items,onIssue?:CitationIssueHandler):number{return CitationManager.convertGroups(editor,items,style,"intext","endnote",oldItems,onIssue);}
 
-  static convertInTextToEndnotes(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string): number {
-    let content = editor.getValue();
-    const inText = CitationManager.parseInTextCitations(content);
-    if (!inText.length) return 0;
-    let max = 0;
-    const re = /\[\^(\d+)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) max = Math.max(max, parseInt(m[1]));
-    const labels = inText.map((_, idx) => String(max + idx + 1));
-    for (let i = inText.length - 1; i >= 0; i--) {
-      const c = inText[i];
-      content = content.slice(0, c.index) + `[^${labels[i]}]` + content.slice(c.index + c.fullMatch.length);
+  static refreshDocument(editor:MinimalEditor,itemMap:Map<string,ZoteroItem>,style:string,mode:string="endnote",oldItems=itemMap,onIssue?:CitationIssueHandler):number {
+    // Stage the whole document, so a later formatter failure cannot leave partial conversion.
+    let value=editor.getValue();const staged={getValue:()=>value,setValue:(next:string)=>{value=next;}} as MinimalEditor;
+    let count=0;
+    if(mode==="inline"){
+      count+=CitationManager.refreshInline(staged,itemMap,style,oldItems,undefined,onIssue);
+      count+=CitationManager.convertInTextToInline(staged,itemMap,style,oldItems,onIssue);
+      count+=CitationManager.convertEndnotesToInline(staged,itemMap,style,oldItems,onIssue);
+    }else if(mode==="intext"){
+      count+=CitationManager.refreshInText(staged,itemMap,style,oldItems,undefined,onIssue);
+      count+=CitationManager.convertInlineToInText(staged,itemMap,style,oldItems,onIssue);
+      count+=CitationManager.convertEndnotesToInText(staged,itemMap,style,oldItems,onIssue);
+    }else{
+      count+=CitationManager.refreshEndnotes(staged,itemMap,style,oldItems,undefined,onIssue);
+      count+=CitationManager.convertInTextToEndnotes(staged,itemMap,style,oldItems,onIssue);
+      count+=CitationManager.convertInlineToEndnotes(staged,itemMap,style,oldItems,onIssue);
     }
-    const defs: string[] = [];
-    for (let i = 0; i < inText.length; i++) {
-      const c = inText[i];
-      const item = itemMap.get(c.key);
-      if (!item) continue;
-      defs.push(CitationManager.buildEndnoteDef(labels[i], item, style, c.page || undefined));
+    if(value.includes(BIBLIOGRAPHY_START)){
+      const bib=CitationManager.generateBibliography(value,itemMap,style,CitationManager.extractBibHeading(value)||undefined);
+      const from=value.indexOf(BIBLIOGRAPHY_START),to=value.indexOf(BIBLIOGRAPHY_END,from);
+      if(bib&&to>=0)value=value.slice(0,from)+bib+value.slice(to+BIBLIOGRAPHY_END.length);
     }
-    if (defs.length) {
-      const bibStart = content.indexOf(BIBLIOGRAPHY_START);
-      if (bibStart !== -1) {
-        let ins = bibStart;
-        while (ins > 0 && content[ins - 1] === "\n") ins--;
-        content = content.slice(0, ins) + "\n\n" + defs.join("\n\n") + content.slice(ins);
-      } else {
-        content += "\n\n" + defs.join("\n\n");
-      }
-    }
-    editor.setValue(content);
-    return defs.length;
-  }
-
-  static refreshDocument(editor: MinimalEditor, itemMap: Map<string, ZoteroItem>, style: string, mode: string = "endnote"): number {
-    let count = 0;
-    if (mode === "inline") {
-      count += CitationManager.convertInTextToInline(editor, itemMap, style);
-      count += CitationManager.convertEndnotesToInline(editor, itemMap, style);
-      count += CitationManager.refreshInline(editor, itemMap, style);
-    } else if (mode === "intext") {
-      count += CitationManager.convertInlineToInText(editor, itemMap, style);
-      count += CitationManager.convertEndnotesToInText(editor, itemMap, style);
-      count += CitationManager.refreshInText(editor, itemMap, style);
-    } else {
-      count += CitationManager.convertInTextToEndnotes(editor, itemMap, style);
-      count += CitationManager.convertInlineToEndnotes(editor, itemMap, style);
-      count += CitationManager.refreshEndnotes(editor, itemMap, style);
-    }
-    const newContent = editor.getValue();
-    if (newContent.includes(BIBLIOGRAPHY_START)) {
-      const bib = CitationManager.generateBibliography(newContent, itemMap, style);
-      if (bib) CitationManager.insertOrReplaceBibliography(editor, bib);
-    }
+    if(value!==editor.getValue())editor.setValue(value);
     return count;
   }
 

@@ -4,7 +4,7 @@
 import { PluginSettingTab, Setting, App, requestUrl, Notice, Plugin } from "obsidian";
 import * as nodeHttp from "http";
 import { t, getLanguage, type Language, type LanguageSettings } from "./i18n";
-import { CitationManager, type MinimalEditor, type CitationRef } from "./CitationManager";
+import { CitationManager, type MinimalEditor, type CitationRef, type CitationIssue } from "./CitationManager";
 import { CslEngine } from "./CslEngine";
 import type { InstalledStyle, ZoteroItem, ZoteroAPI } from "./ZoteroAPI";
 
@@ -88,6 +88,7 @@ interface ZoteroPluginLike extends Plugin {
   saveSettings: () => Promise<void>;
   applyLanguage: () => void;
   getEditor: () => MinimalEditor | null;
+  showCitationIssues?: (editor:MinimalEditor,issues:CitationIssue[],count:number)=>void;
   resolveItems: (keys: string[]) => Promise<Map<string, ZoteroItem> | null>;
   refreshEditorExtension: () => void;
   refreshToolbars: () => void;
@@ -213,15 +214,18 @@ export class ZoteroSettingTab extends PluginSettingTab {
             const keys = [...new Set(all.map((c: CitationRef) => c.key))];
             const itemMap = await this.plugin.resolveItems(keys);
             if (!itemMap) return;
+            if(this.plugin.getEditor()!==editor || editor.getValue()!==content){new Notice(t(this.plugin.settings,"notice.operationChanged"),7000);return;}
+            const issues:CitationIssue[]=[];
             let count: number;
             try {
-              count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v);
+              count = CitationManager.refreshDocument(editor, itemMap, this.plugin.settings.cslStyle, v,itemMap,issue=>issues.push(issue));
             } catch (error) {
               new Notice(t(this.plugin.settings, "notice.styleFormatFailed", { error: String(error) }), 8000);
               return;
             }
             this.plugin.refreshEditorExtension();
-            new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
+            if(issues.length)this.plugin.showCitationIssues?.(editor,issues,count);
+            else new Notice(t(this.plugin.settings, "settings.switchModeNotice", {
               mode: getModeLabel(v, this.plugin.settings, "short"),
               count,
             }));
