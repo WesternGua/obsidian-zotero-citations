@@ -1,3 +1,4 @@
+import { alignLocatorPreview } from "../LocatorPreviewAlignment";
 /**
  * FootnoteExtension.ts – CodeMirror extension for Word-style footnote rendering
  */
@@ -530,10 +531,16 @@ function showRenderedPopover(target: HTMLElement, spec: PopoverSpec): void {
 
 async function renderPopoverMarkdown(preview: HTMLElement, spec: PopoverSpec, component: Component, target: HTMLElement, reposition: () => void): Promise<void> {
   try {
-    preview.empty();
+    const placeholder=preview.firstChild;
     await MarkdownRenderer.render(spec.app, spec.markdown, preview, spec.getSourcePath(), component);
     if (activePopover?.target !== target) return;
-    if (spec.edit) await mountLocatorEditor(preview, spec, target, component, reposition);
+    if(placeholder?.parentNode===preview)placeholder.remove();
+    // Paint the existing footnote before formatting locator controls.
+    if (spec.edit) {
+      await new Promise<void>(resolve=>getActiveWindow().setTimeout(resolve,0));
+      if (activePopover?.target !== target) return;
+      await mountLocatorEditor(preview, spec, target, component, reposition);
+    }
     reposition();
     getActiveWindow().requestAnimationFrame(reposition);
   } catch {
@@ -545,21 +552,38 @@ async function mountLocatorEditor(preview: HTMLElement, spec: PopoverSpec, targe
   const edit = spec.edit!;
   const plugin = (spec.app as AppWithPlugins).plugins?.plugins?.["zotero-citations"];
   const items = edit.entries.map(entry => plugin?.getCached(entry.key));
-  if (plugin && items.every(Boolean)) {
-    const parts = resolveCitationContent(citationBody(edit.original,edit.kind),edit.entries,new Map(items.map(item=>[item!.key,item!])),plugin.settings.cslStyle,edit.kind==="intext");
-    const selected = edit.entries.map((entry, index) => ({ item: items[index]!, page: entry.page }));
-    let annotated = CslEngine.formatLocatorPreview(selected, parts.style || plugin.settings.cslStyle, edit.kind === "intext");
-    if (parts.safe && annotated?.plain !== parts.citation) {
-      for (const style of CslEngine.installedStyleIds()) {
-        const candidate = CslEngine.formatLocatorPreview(selected,style,edit.kind==="intext");
-        if (candidate?.plain === parts.citation) { annotated = candidate; break; }
-      }
-    }
-    // Keep the stored citation text and formatting when cache or style has changed.
-    if (parts.safe && annotated && annotated.plain === parts.citation) {
-      preview.empty();
-      await MarkdownRenderer.render(spec.app, annotated.markdown + displayCitationBodyTail(parts.suffix), preview, spec.getSourcePath(), component);
-    }
+  if(plugin && items.some(item=>!item)){
+    const missing=[...new Set(edit.entries.filter((_,index)=>!items[index]).map(entry=>entry.key))];
+    const fetched=await Promise.all(missing.map(async key=>{
+      try{return [key,await plugin.fetchAndCache?.(key)] as const;}catch{return [key,null] as const;}
+    }));
+    if(!preview.isConnected)return;
+    const found=new Map(fetched);
+    edit.entries.forEach((entry,index)=>{if(!items[index])items[index]=found.get(entry.key)||undefined;});
+  }
+  const itemMap=new Map<string,ZoteroItem>();
+  items.forEach(item=>{if(item)itemMap.set(item.key,item);});
+  const parts=resolveCitationContent(citationBody(edit.original,edit.kind),edit.entries,itemMap,plugin?.settings.cslStyle||"",edit.kind==="intext",false);
+  const selected = edit.entries.map((entry, index) => ({ item: items[index]!, page: entry.page }));
+  const annotated = plugin && items.every(Boolean) ? CslEngine.formatLocatorPreview(selected, parts.style || plugin.settings.cslStyle, edit.kind === "intext") : null;
+  let marked = parts.safe && annotated ? alignLocatorPreview(annotated.markdown,parts.citation) : null;
+  // Hover never scans unrelated installed styles. Stored text remains authoritative.
+  if(parts.safe){
+    marked=marked||parts.citation;
+    edit.entries.forEach((_,index)=>{
+      if(marked!.includes(`\uE000zl:${index}\uE001`))return;
+      const anchor=`\uE000ze:${index}\uE001`;
+      // A single manually edited citation may omit its locator entirely.
+      // Put its control at the confirmed citation boundary, before commentary.
+      if(edit.entries.length===1)marked=marked!.replace(anchor,"")+" "+anchor+" ";
+      else if(!marked!.includes(anchor))marked+=" "+anchor+" ";
+    });
+  }
+  // Keep the stored citation text and formatting when cache or style has changed.
+  if (marked) {
+    const previousNodes=Array.from(preview.childNodes);
+    await MarkdownRenderer.render(spec.app, marked + displayCitationBodyTail(parts.suffix), preview, spec.getSourcePath(), component);
+    for(const node of previousNodes)if(node.parentNode===preview)node.remove();
   }
   mountCompactLocatorEditor(preview, {
     app: spec.app,
